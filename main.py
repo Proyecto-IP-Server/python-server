@@ -148,7 +148,7 @@ def create_materias():
                         session.add(ciclo)
                         session.commit()  # Guardar Ciclo
 
-                    print("ciclo insertado")
+                        print("ciclo insertado")
 
                     # 2. Insertar Carrera (si no existe)
                     carrera = session.exec(select(Carrera).where(
@@ -158,7 +158,7 @@ def create_materias():
                         session.add(carrera)
                         session.commit()  # Guardar Carrera
 
-                    print("carrera insertada")
+                        print("carrera insertada")
 
                     centro = session.exec(select(Centro).where(
                         Centro.nombre == "CUCEI")).first()
@@ -167,12 +167,14 @@ def create_materias():
                         session.add(centro)
                         session.commit()  # Guardar Carrera
 
-                    print("centro insertado")
+                        print("centro insertado")
 
                     # 3. Insertar ClaveMateria (si no existe)
                     # 4. Insertar Materia (si no existe)
-                    materia = session.exec(select(Materia).where(
-                        Materia.clave == course["clave"])).first()
+                    materia = session.exec(
+                        select(Materia).where(
+                                Materia.clave == course["clave"]
+                            )).first()
                     if not materia:
                         materia = Materia(
                             nombre=course["materia"],
@@ -182,7 +184,7 @@ def create_materias():
                         session.add(materia)
                         session.commit()  # Guardar Materia
 
-                    print("materia insertada")
+                        print("materia insertada")
 
                     # 5. Insertar Seccion
                     prof = course["profesores"][0]
@@ -192,7 +194,7 @@ def create_materias():
                         profesor = Profesor(nombre=prof["nombre"])
                         session.add(profesor)
                         session.commit()  # Guardar Profesor
-                    print("profesor insertado")
+                        print("profesor insertado")
 
                     seccion = session.exec(select(Seccion).where(
                         Seccion.nrc == course["nrc"])).first()
@@ -210,7 +212,7 @@ def create_materias():
                         session.add(seccion)
                         session.commit()  # Guardar Sección
 
-                    print("seccion insertada")
+                        print("seccion insertada")
 
                     # 6. Insertar Profesor
 
@@ -223,6 +225,7 @@ def create_materias():
                                 salon=horario["aula"], edificio=horario["edificio"])
                             session.add(aula)
                             session.commit()  # Guardar Aula
+                            print("aula insertada")
                         fecha_inicio, fecha_fin = horario["periodo"].split('-')
                         fecha_inicio = fecha_inicio.strip()
                         fecha_fin = fecha_fin.strip()
@@ -233,7 +236,7 @@ def create_materias():
                             day=fecha_fin[0], month=fecha_fin[1], year=fecha_fin[2] + 2000)
                         fecha_inicio = datetime.date(
                             day=fecha_inicio[0], month=fecha_inicio[1], year=fecha_inicio[2] + 2000)
-                        print(fecha_inicio, fecha_fin)
+                        #print(fecha_inicio, fecha_fin)
                         hora_inicio, hora_fin = horario["horas"].split('-')
                         hora_inicio = datetime.time(
                             hour=int(hora_inicio[:2]), minute=int(hora_inicio[2:]))
@@ -244,8 +247,16 @@ def create_materias():
 
                         for i, c in enumerate(dias_semana, 1):
                             if c != ".":
-                                sesion = session.exec(select(Sesion).where(Sesion.id_seccion == seccion.id, Sesion.id_aula == seccion.id, Sesion.fecha_inicio ==
-                                                      fecha_inicio, Sesion.fecha_fin == fecha_fin, Sesion.hora_inicio == hora_inicio, Sesion.hora_fin == hora_fin, Sesion.dia_semana == i)).first()
+                                sesion = session.exec(select(Sesion).where(
+                                    Sesion.id_seccion == seccion.id, 
+                                    Sesion.id_aula == aula.id, 
+                                    Sesion.fecha_inicio == fecha_inicio, 
+                                    Sesion.fecha_fin == fecha_fin, 
+                                    Sesion.hora_inicio == hora_inicio, 
+                                    Sesion.hora_fin == hora_fin, 
+                                    Sesion.dia_semana == i
+                                    )).first()
+                                
                                 if not sesion:
                                     sesion = Sesion(
                                         id_seccion=seccion.id,
@@ -257,6 +268,7 @@ def create_materias():
                                         dia_semana=i
                                     )
                                     session.add(sesion)
+                                    print("sesion insertada")
                         session.commit()  # Guardar Sesión
 
     except Exception as e:
@@ -291,10 +303,17 @@ def validar_materia(materia: str, session: SessionDep) -> int:
         raise HTTPException(status_code=404, detail="Materia no encontrada")
     return id_materia
 
+def validar_centro(centro: str, session: SessionDep) -> int:
+    id_centro = session.exec(select(Centro.id).where(
+        Centro.nombre == centro)).first()
+    if id_centro is None:
+        raise HTTPException(status_code=404, detail="Centro no encontrado")
+    return id_centro
+
 
 CicloDep = Annotated[int, Depends(validar_ciclo)]
 MateriaDep = Annotated[int, Depends(validar_materia)]
-
+CentroDep = Annotated[int, Depends(validar_centro)]
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -398,4 +417,34 @@ def read_resenas(
 
     return result
 
+@app.get("/ciclos/", response_model=list[str])
+def read_ciclos(session: SessionDep):
+    ciclos = session.exec(select(Ciclo)).all()
+    return [c.nombre for c in ciclos]
 
+@app.get("/centros/", response_model=list[str])
+def read_centros(session: SessionDep):
+    centros = session.exec(select(Centro)).all()
+    return [c.nombre for c in centros]
+
+@app.get("/carreras/{ciclo}/{centro}", response_model=list[str])
+def read_carreras(session: SessionDep, ciclo: CicloDep, centro: CentroDep):
+    #SELECT DISTINCT carrera.nombre,ciclo.nombre,centro.nombre FROM seccion JOIN materia JOIN carrera JOIN centro JOIN ciclo WHERE centro.nombre == "CUCEI" AND ciclo.nombre == "2025"
+    print(ciclo, centro)
+    statement = (
+        select(Carrera.nombre)
+        .join(Materia)  
+        .join(Seccion)
+        .join(Centro)
+        .join(Ciclo)
+        .where(Centro.id == centro)
+        .where(Ciclo.id == ciclo)
+        .distinct()
+        )
+    
+    
+    carreras = session.exec(statement).all()
+    
+    return carreras
+
+    
