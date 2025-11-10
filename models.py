@@ -15,7 +15,8 @@ class Centro(SQLModel, table=True):
 
 class Carrera(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
-    nombre: str = Field(index=True)
+    clave: str = Field(index=True)
+    nombre: str = Field()
     materias: list["Materia"] = Relationship(back_populates="carrera")
 
 class Profesor(SQLModel, table=True):
@@ -25,7 +26,7 @@ class Profesor(SQLModel, table=True):
 
 class Alumno(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
-    correo: str
+    correo: str = Field(index=True, unique=True)
 
 class Materia(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
@@ -42,9 +43,23 @@ class Resena(SQLModel, table=True):
     id_profesor : int = Field(foreign_key="profesor.id", index=True)
     id_materia : int = Field(foreign_key="materia.id", index=True)
     id_alumno : int = Field(foreign_key="alumno.id", index=True)
-    fecha_creacion: datetime.datetime
+    fecha_creacion: datetime.datetime = Field(default_factory=datetime.datetime.utcnow)
     contenido : str
-    satisfaccion : int
+    satisfaccion : int = Field(ge=1, le=5)
+
+class ResenaPendiente(SQLModel, table=True):
+    __table_args__ = (
+        UniqueConstraint("id_profesor", "id_materia", "id_alumno", name="pendiente_unica_por_tupla"),
+    )
+    id: int | None = Field(default=None, primary_key=True)
+    id_profesor : int = Field(foreign_key="profesor.id", index=True)
+    id_materia : int = Field(foreign_key="materia.id", index=True)
+    id_alumno : int = Field(foreign_key="alumno.id", index=True)
+    fecha_creacion: datetime.datetime = Field(default_factory=datetime.datetime.utcnow)
+    contenido : str
+    satisfaccion : int = Field(ge=1, le=5)
+    token_verificacion : str = Field(index=True, unique=True)
+
 
 class Seccion(SQLModel, table=True):
     __table_args__ = (
@@ -86,6 +101,7 @@ class Sesion(SQLModel, table=True):
     hora_fin: datetime.time
     dia_semana: int
 
+
 # --- Modelos Pydantic (Respuesta de API) ---
 
 class MateriaPublic(BaseModel):
@@ -117,3 +133,16 @@ class ResenaPublic(BaseModel):
     profesor: str
     materia: str
     alumno: str
+
+
+
+class ResenaPendienteCreate(BaseModel):
+    correo_alumno: str
+    clave_materia: str
+    nombre_profesor: str
+    contenido: str
+    satisfaccion: int = Field(ge=1, le=5)
+
+class ResenaPendienteResponse(BaseModel):
+    mensaje: str
+    advertencia: str | None = None

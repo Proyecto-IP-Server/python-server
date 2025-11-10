@@ -13,9 +13,9 @@ BASE_URL = 'http://consulta.siiau.udg.mx/wco/'
 FORMA_CONSULTA_URL = f"{BASE_URL}sspseca.forma_consulta"
 LISTA_CARRERAS_URL = f"{BASE_URL}sspseca.lista_carreras"
 CONSULTA_OFERTA_URL = f"{BASE_URL}sspseca.consulta_oferta"
-NUM_WORKERS = 15  # Procesar 4 centros concurrentemente
+NUM_WORKERS = 20 
 
-CANT_CICLOS_A_PROCESAR = 9  # Limitar a 1 ciclo (el más reciente)
+CANT_CICLOS_A_PROCESAR = None  # Limitar a 1 ciclo (el más reciente)
 CICLOS_A_PROCESAR = None  # CANT_CICLOS_A_PROCESAR DEBE SER None: 0 para 2025A, 1 para 2025V, 2 para 2025B, etc.
 
 # --- Funciones de Parseo y Scrapeo (Asíncronas) ---
@@ -257,7 +257,7 @@ async def process_center_data(
 #       print(f"    -> Carrera: {carrera_code} ({carrera_info['nombre']})")
         
         # 4. Obtener/Crear Carrera
-        carrera_obj, _ = get_or_create(session, Carrera, nombre=carrera_info["nombre"])
+        carrera_obj, _ = get_or_create(session, Carrera, clave=carrera_code, nombre=carrera_info["nombre"])
 
         # 5. Obtener Cursos
         cursos_encontrados = await get_courses_for_carrera_async(client, ciclo_code, centro_code, carrera_code)

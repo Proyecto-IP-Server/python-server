@@ -37,3 +37,7 @@ oferta_academica.json
 
 scraper.py
 main2.py
+*.db-journal
+
+# Secreto
+.env
