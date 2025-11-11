@@ -152,3 +152,7 @@ class ResenaPendienteResponse(BaseModel):
 class ResenaVerificadaResponse(BaseModel):
     mensaje: str
     status: str
+
+class CarreraPublic(BaseModel):
+    clave: str
+    nombre: str

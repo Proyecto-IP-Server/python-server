@@ -8,6 +8,8 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from sqlmodel import select, Session
+import json
+import os
 
 # Importar dependencias, modelos y el servicio de scrapeo
 from database import SessionDep, create_db_and_tables
@@ -15,6 +17,11 @@ from models import *
 from scraper_service import scrape_and_update_db, scrape_and_update_targeted
 from email_service import enviar_enlace_verificacion
 import hashlib
+
+# Cargar alias de centros
+ALIAS_CENTROS_PATH = os.path.join(os.path.dirname(__file__), "alias_centros.json")
+with open(ALIAS_CENTROS_PATH, 'r', encoding='utf-8') as f:
+    ALIAS_CENTROS = json.load(f)
 
 # --- Dependencias de Endpoints ---
 
@@ -34,8 +41,22 @@ def validar_materia(materia: str, session: SessionDep) -> int:
     return id_materia
 
 def validar_centro(centro: str, session: SessionDep) -> int:
+
     id_centro = session.exec(select(Centro.id).where(
         Centro.nombre == centro)).first()
+    
+    if id_centro is None:
+
+        nombre_original = None
+        for nombre, alias in ALIAS_CENTROS.items():
+            if alias == centro:
+                nombre_original = nombre
+                break
+        
+        if nombre_original:
+            id_centro = session.exec(select(Centro.id).where(
+                Centro.nombre == nombre_original)).first()
+    
     if id_centro is None:
         raise HTTPException(status_code=404, detail="Centro no encontrado")
     return id_centro
@@ -202,12 +223,19 @@ def read_ciclos(session: SessionDep):
 @app.get("/centros/", response_model=list[str])
 def read_centros(session: SessionDep):
     centros = session.exec(select(Centro)).all()
-    return [c.nombre for c in centros]
+    result = []
+    for c in centros:
 
-@app.get("/carreras/{ciclo}/{centro}", response_model=list[str])
+        alias = ALIAS_CENTROS.get(c.nombre, "")
+
+        centro_display = alias if alias else c.nombre
+        result.append(centro_display)
+    return sorted(result)
+
+@app.get("/carreras/{ciclo}/{centro}", response_model=list[CarreraPublic])
 def read_carreras(session: SessionDep, ciclo: CicloDep, centro: CentroDep):
     statement = (
-        select(Carrera.clave)
+        select(Carrera)
         .join(Materia)  
         .join(Seccion)
         .join(Centro)
@@ -218,7 +246,7 @@ def read_carreras(session: SessionDep, ciclo: CicloDep, centro: CentroDep):
         )
     
     carreras = session.exec(statement).all()
-    return carreras
+    return [CarreraPublic(clave=c.clave, nombre=c.nombre) for c in carreras]
 
 # Reseñas
 @app.get("/resenas/", response_model=list[ResenaPublic])
