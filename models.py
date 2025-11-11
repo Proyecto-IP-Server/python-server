@@ -46,6 +46,10 @@ class Resena(SQLModel, table=True):
     fecha_creacion: datetime.datetime = Field(default_factory=datetime.datetime.utcnow)
     contenido : str
     satisfaccion : int = Field(ge=1, le=5)
+    
+    profesor: Profesor = Relationship()
+    materia: Materia = Relationship()
+    alumno: Alumno = Relationship()
 
 class ResenaPendiente(SQLModel, table=True):
     __table_args__ = (
@@ -58,7 +62,7 @@ class ResenaPendiente(SQLModel, table=True):
     fecha_creacion: datetime.datetime = Field(default_factory=datetime.datetime.utcnow)
     contenido : str
     satisfaccion : int = Field(ge=1, le=5)
-    token_verificacion : str = Field(index=True, unique=True)
+    codigo : str = Field(index=True, unique=True)
 
 
 class Seccion(SQLModel, table=True):
@@ -134,8 +138,6 @@ class ResenaPublic(BaseModel):
     materia: str
     alumno: str
 
-
-
 class ResenaPendienteCreate(BaseModel):
     correo_alumno: str
     clave_materia: str
@@ -146,3 +148,7 @@ class ResenaPendienteCreate(BaseModel):
 class ResenaPendienteResponse(BaseModel):
     mensaje: str
     advertencia: str | None = None
+
+class ResenaVerificadaResponse(BaseModel):
+    mensaje: str
+    status: str

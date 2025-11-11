@@ -1,6 +1,6 @@
 import asyncio
 import httpx
-import secrets
+import random
 import datetime
 from typing import Annotated
 from contextlib import asynccontextmanager
@@ -14,6 +14,7 @@ from database import SessionDep, create_db_and_tables
 from models import *
 from scraper_service import scrape_and_update_db, scrape_and_update_targeted
 from email_service import enviar_enlace_verificacion
+import hashlib
 
 # --- Dependencias de Endpoints ---
 
@@ -39,10 +40,41 @@ def validar_centro(centro: str, session: SessionDep) -> int:
         raise HTTPException(status_code=404, detail="Centro no encontrado")
     return id_centro
 
+def validar_alumno(correo_alumno: str, session: SessionDep) -> int:
+    if not correo_alumno.endswith("@alumnos.udg.mx"):
+        raise HTTPException(
+            status_code=400, 
+            detail="No es un correo válido de alumno (@alumnos.udg.mx)"
+        )
+    
+    alumno = session.exec(select(Alumno)
+                        .where(Alumno.correo == correo_alumno)).first()
+    if alumno is None:
+        # Crear alumno si no existe
+        alumno = Alumno(correo=correo_alumno)
+        session.add(alumno)
+        session.commit()
+        session.refresh(alumno)
+    
+    if alumno.id is None:
+        raise HTTPException(status_code=500, detail="Error" )
+    
+    return alumno.id
+
+def validar_profesor(nombre_profesor: str, session: SessionDep) -> int:
+    id_profesor = session.exec(select(Profesor.id).where(
+        Profesor.nombre == nombre_profesor)).first()
+    if id_profesor is None:
+        raise HTTPException(status_code=404, detail="Profesor no encontrado")
+    return id_profesor
+
 
 CicloDep = Annotated[int, Depends(validar_ciclo)]
 MateriaDep = Annotated[int, Depends(validar_materia)]
 CentroDep = Annotated[int, Depends(validar_centro)]
+AlumnoDep = Annotated[int, Depends(validar_alumno)]
+ProfesorDep = Annotated[int, Depends(validar_profesor)]
+
 
 # --- Tareas de Fondo ---
 
@@ -160,15 +192,6 @@ def read_materia(session: SessionDep, materia: MateriaDep):
                 carrera=m.carrera.clave
             )
 
-@app.get("/resenas/", response_model=list[ResenaPublic])
-def read_resenas(
-        session: SessionDep,
-        profesor: str | None = None,
-        materia: str | None = None,
-        offset: int = 0,
-        limit: Annotated[int, Query(le=100)] = 100):
-    
-    return []
 
 
 @app.get("/ciclos/", response_model=list[str])
@@ -197,48 +220,61 @@ def read_carreras(session: SessionDep, ciclo: CicloDep, centro: CentroDep):
     carreras = session.exec(statement).all()
     return carreras
 
-# --- Endpoints de Reseñas ---
+# Reseñas
+@app.get("/resenas/", response_model=list[ResenaPublic])
+def read_resenas(
+        session: SessionDep,
+        profesor: str | None = None,
+        materia: str | None = None,
+        offset: int = 0,
+        limit: Annotated[int, Query(le=100)] = 100):
+    
+    stmt = select(Resena)
+    
+    if profesor is not None:
+        id_profesor = session.exec(select(Profesor.id).where(
+            Profesor.nombre == profesor)).first()
+        if id_profesor is None:
+            raise HTTPException(status_code=404, detail="Profesor no encontrado")
+        stmt = stmt.where(Resena.id_profesor == id_profesor)
+    
+    if materia is not None:
+        id_materia = session.exec(select(Materia.id).where(
+            Materia.clave == materia)).first()
+        if id_materia is None:
+            raise HTTPException(status_code=404, detail="Materia no encontrada")
+        stmt = stmt.where(Resena.id_materia == id_materia)
+    
+    resenas = session.exec(stmt.offset(offset).limit(limit)).all()
+    
+    result: list[ResenaPublic] = []
+    for r in resenas:
+        result.append(ResenaPublic(
+            profesor=r.profesor.nombre,
+            materia=r.materia.clave,
+            alumno=hashlib.sha256(r.alumno.correo.encode('utf-8')).hexdigest(),
+            contenido=r.contenido,
+            satisfaccion=r.satisfaccion
+        ))
+    return result
 
 @app.post("/resenas/solicitar", response_model=ResenaPendienteResponse)
-async def solicitar_resena(datos: ResenaPendienteCreate, session: SessionDep, request: Request):
-
-    if not datos.correo_alumno.endswith("@alumnos.udg.mx"):
-        raise HTTPException(
-            status_code=400, 
-            detail="No es un correo válido de alumno (@alumnos.udg.mx)"
-        )
-    
-    alumno = session.exec(
-        select(Alumno).where(Alumno.correo == datos.correo_alumno)
-    ).first()
-    
-    if not alumno:
-        alumno = Alumno(correo=datos.correo_alumno)
-        session.add(alumno)
-        session.commit()
-        session.refresh(alumno)
-    
-    # Buscar materia
-    materia = session.exec(
-        select(Materia).where(Materia.clave == datos.clave_materia)
-    ).first()
-    
-    if not materia:
-        raise HTTPException(status_code=404, detail="Materia no encontrada")
-    
-    # Buscar profesor
-    profesor = session.exec(
-        select(Profesor).where(Profesor.nombre == datos.nombre_profesor)
-    ).first()
-    if not profesor:
-        raise HTTPException(status_code=404, detail="Profesor no encontrado")
+async def solicitar_resena(
+    datos: ResenaPendienteCreate, 
+    session: SessionDep, 
+    request: Request
+):
+    # Validar y obtener IDs usando las funciones de validación
+    id_alumno = validar_alumno(datos.correo_alumno, session)
+    id_materia = validar_materia(datos.clave_materia, session)
+    id_profesor = validar_profesor(datos.nombre_profesor, session)
     
     # Buscar si ya hay una reseña del mismo alumno para esa materia y profesor
     resena_existente = session.exec(
         select(Resena).where(
-            Resena.id_profesor == profesor.id,
-            Resena.id_materia == materia.id,
-            Resena.id_alumno == alumno.id
+            Resena.id_profesor == id_profesor,
+            Resena.id_materia == id_materia,
+            Resena.id_alumno == id_alumno
         )
     ).first()
     
@@ -251,40 +287,51 @@ async def solicitar_resena(datos: ResenaPendienteCreate, session: SessionDep, re
     # Verificar si ya existe una reseña pendiente
     pendiente_existente = session.exec(
         select(ResenaPendiente).where(
-            ResenaPendiente.id_profesor == profesor.id,
-            ResenaPendiente.id_materia == materia.id,
-            ResenaPendiente.id_alumno == alumno.id
+            ResenaPendiente.id_profesor == id_profesor,
+            ResenaPendiente.id_materia == id_materia,
+            ResenaPendiente.id_alumno == id_alumno
         )
     ).first()
-    
+    # Generar un código único de 6 dígitos, valida en la db si ya existe, si ya crea uno nuevo
+    while True:
+        codigo = str(random.randint(0, 999999)).zfill(6)
+
+        codigo_existente = session.exec(
+            select(ResenaPendiente).where(ResenaPendiente.codigo == codigo)
+            ).first()
+        if not codigo_existente:
+            break
+
     if pendiente_existente:
-        
-        token = secrets.token_urlsafe(32)
 
         pendiente_existente.contenido = datos.contenido
         pendiente_existente.satisfaccion = datos.satisfaccion
-        pendiente_existente.token_verificacion = token
+        pendiente_existente.codigo = codigo
         pendiente_existente.fecha_creacion = datetime.datetime.utcnow()
         session.commit()
     else:
 
-        token = secrets.token_urlsafe(32)
-
         nueva_pendiente = ResenaPendiente(
-            id_profesor=profesor.id,
-            id_materia=materia.id,
-            id_alumno=alumno.id,
+            id_profesor=id_profesor,
+            id_materia=id_materia,
+            id_alumno=id_alumno,
             contenido=datos.contenido,
             satisfaccion=datos.satisfaccion,
-            token_verificacion=token
+            codigo=codigo
         )
+        print(f"DEBUG: profesor:{id_profesor}, materia:{id_materia}, alumno:{id_alumno}")
+        print(f"DEBUG: Tipo de datos: {type(id_profesor)}, {type(id_materia)}, {type(id_alumno)}")
         session.add(nueva_pendiente)
         session.commit()
     
     
     try:
-        base_url = str(request.base_url).rstrip('/')
-        await enviar_enlace_verificacion(datos.correo_alumno, token, base_url)
+
+        base_url = "http://localhost:8080/api" or str(request.base_url).rstrip('/')+"/api" #TAG: Ajustar URL base para producción
+
+        print(f"DEBUG: base_url para email: {base_url}")
+        await enviar_enlace_verificacion(datos.correo_alumno, codigo, base_url)
+
     except Exception as e:
         
         return ResenaPendienteResponse(
@@ -297,22 +344,31 @@ async def solicitar_resena(datos: ResenaPendienteCreate, session: SessionDep, re
     )
 
 
-@app.get("/resenas/verificar/{token}", response_class=HTMLResponse)
-async def verificar_resena(token: str, session: SessionDep):
-
+@app.get("/resenas/verificar/{codigo}", response_model=ResenaVerificadaResponse)
+async def verificar_resena(
+    codigo: str, 
+    session: SessionDep,
+    json: bool = Query(False)
+):
     pendiente = session.exec(
-        select(ResenaPendiente).where(ResenaPendiente.token_verificacion == token)
+        select(ResenaPendiente).where(ResenaPendiente.codigo == codigo)
     ).first()
     
     if not pendiente:
-        return """
+        if json:
+            raise HTTPException(
+                status_code=404,
+                detail="El enlace de verificación no es válido o ya fue utilizado."
+            )
+        
+        return HTMLResponse("""
         <html>
             <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; text-align: center;">
-                <h2 style="color: #dc2626;">Token inválido</h2>
+                <h2 style="color: #dc2626;">Codigo inválido</h2>
                 <p>El enlace de verificación no es válido o ya fue utilizado.</p>
             </body>
         </html>
-        """
+        """)
     
     # Crear la reseña pública
     resena_publica = Resena(
@@ -328,24 +384,41 @@ async def verificar_resena(token: str, session: SessionDep):
         session.delete(pendiente)
         session.commit()
         
-        return """
+        if json:
+            return ResenaVerificadaResponse(
+                mensaje="Reseña publicada exitosamente",
+                status="success"
+            )
+        
+        return HTMLResponse("""
         <html>
             <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; text-align: center;">
-                <h1 style="color: #16a34a;"> Reseña publicada.</h2>
+                <h1 style="color: #16a34a;"> Reseña publicada.</h1>
                 <p>Tu reseña ha sido verificada y ahora es pública.</p>
             </body>
         </html>
-        """
+        """)
     except Exception as e:
         session.rollback()
-        return f"""
+        if json:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error al publicar la reseña: {str(e)}"
+            )
+        return HTMLResponse(f"""
         <html>
             <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; text-align: center;">
-                <h2 style="color: #dc2626;">Error </h2>
+                <h2 style="color: #dc2626;">Error</h2>
                 <p>Error: {str(e)}</p>
             </body>
         </html>
-        """
+        """)
+
+
+
+
+
+
 
 # --- Endpoints de Admin ---
 
