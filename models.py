@@ -10,14 +10,19 @@ class Ciclo(SQLModel, table=True):
 
 class Centro(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
-    nombre: str = Field(index=True)
+    clave: str | None = Field(default=None, index=True)  # Código cup (solo para uso interno de refresh)
+    nombre: str = Field(index=True, unique=True)
     secciones: list["Seccion"] = Relationship(back_populates="centro")
+
+class CarreraMateriaLink(SQLModel, table=True):
+    id_carrera: int = Field(foreign_key="carrera.id", primary_key=True)
+    id_materia: int = Field(foreign_key="materia.id", primary_key=True)
 
 class Carrera(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     clave: str = Field(index=True)
     nombre: str = Field()
-    materias: list["Materia"] = Relationship(back_populates="carrera")
+    materias: list["Materia"] = Relationship(back_populates="carreras", link_model = CarreraMateriaLink)
 
 class Profesor(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
@@ -32,8 +37,9 @@ class Materia(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     clave: str = Field(unique=True, index=True)
     nombre: str = Field()
-    id_carrera: int = Field(foreign_key="carrera.id", index=True)
-    carrera: Carrera = Relationship(back_populates="materias")
+    carreras: list["Carrera"] = Relationship(back_populates="materias", link_model = CarreraMateriaLink)
+
+
 
 class Resena(SQLModel, table=True):
     __table_args__ = (
@@ -111,7 +117,7 @@ class Sesion(SQLModel, table=True):
 class MateriaPublic(BaseModel):
     clave: str
     nombre: str
-    carrera: str
+
 
 class SeccionPublic(BaseModel):
     numero: str

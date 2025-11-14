@@ -7,16 +7,44 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
-from sqlmodel import select, Session
+from sqlmodel import select, Session, and_
+from pydantic import BaseModel, Field
 import json
 import os
 
 # Importar dependencias, modelos y el servicio de scrapeo
 from database import SessionDep, create_db_and_tables
 from models import *
-from scraper_service import scrape_and_update_db, scrape_and_update_targeted
+from scraper_service import scrape_and_update_db, scrape_specific_materia
 from email_service import enviar_enlace_verificacion
 import hashlib
+
+# --- Configuración de Actualización Histórica ---
+HISTORICAL_UPDATE_INTERVAL_HOURS = 24  # Cada cuántas horas actualizar ciclos históricos (ajustable)
+
+async def daily_historical_update_loop(lock: asyncio.Lock, client: httpx.AsyncClient):
+    while True:
+
+        await asyncio.sleep(HISTORICAL_UPDATE_INTERVAL_HOURS * 60 * 60)
+        
+        print(f"\n{'='*60}")
+        print(f"[ACTUALIZACIÓN HISTÓRICA] Iniciando scrapeo de ciclos históricos...")
+        print(f"  Intervalo: cada {HISTORICAL_UPDATE_INTERVAL_HOURS} horas")
+        print(f"{'='*60}")
+        
+        try:
+            await scrape_and_update_db(
+                lock=lock,
+                client=client,
+                num_ciclos_recientes=3,
+                inicial=False,
+                force_historical=False #TRUE TAG: Cambiar a True para forzar siempre la actualización histórica
+            )
+            print(f"\n[ACTUALIZACIÓN HISTÓRICA] Completado exitosamente.")
+        except Exception as e:
+            print(f"\n[ACTUALIZACIÓN HISTÓRICA] Error: {e}")
+            import traceback
+            traceback.print_exc()
 
 # Cargar alias de centros
 ALIAS_CENTROS_PATH = os.path.join(os.path.dirname(__file__), "alias_centros.json")
@@ -61,6 +89,40 @@ def validar_centro(centro: str, session: SessionDep) -> int:
         raise HTTPException(status_code=404, detail="Centro no encontrado")
     return id_centro
 
+def centro_opcional(session: SessionDep, centro: str | None = None) -> int | None:
+    if centro is None:
+        return None
+    return validar_centro(centro, session)
+
+def obtener_clave_centro(centro_nombre: str, session: SessionDep) -> tuple[str, str]:
+
+    centro = session.exec(select(Centro).where(Centro.nombre == centro_nombre)).first()
+    
+    if centro is None:
+
+        nombre_original = None
+        for nombre, alias in ALIAS_CENTROS.items():
+            if alias == centro_nombre:
+                nombre_original = nombre
+                break
+        
+        if nombre_original:
+            centro = session.exec(select(Centro).where(Centro.nombre == nombre_original)).first()
+    
+    if centro is None:
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Centro '{centro_nombre}' no encontrado. Debe ejecutarse el scraping principal primero."
+        )
+    
+    if centro.clave is None:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Centro '{centro.nombre}' no tiene clave asignada. Se asignará en el próximo scraping automático."
+        )
+    
+    return centro.clave, centro.nombre
+
 def validar_alumno(correo_alumno: str, session: SessionDep) -> int:
     if not correo_alumno.endswith("@alumnos.udg.mx"):
         raise HTTPException(
@@ -89,24 +151,37 @@ def validar_profesor(nombre_profesor: str, session: SessionDep) -> int:
         raise HTTPException(status_code=404, detail="Profesor no encontrado")
     return id_profesor
 
+def validar_carrera(carrera: str, session: SessionDep) -> int:
+    id_carrera = session.exec(select(Carrera.id).where(
+        Carrera.clave == carrera)).first()
+    if id_carrera is None:
+        raise HTTPException(status_code=404, detail="Carrera no encontrada")
+    return id_carrera
+
+def carrera_opcional(session: SessionDep, carrera: str | None = None) -> int | None:
+    if carrera is None:
+        return None
+    return validar_carrera(carrera, session)
 
 CicloDep = Annotated[int, Depends(validar_ciclo)]
 MateriaDep = Annotated[int, Depends(validar_materia)]
 CentroDep = Annotated[int, Depends(validar_centro)]
 AlumnoDep = Annotated[int, Depends(validar_alumno)]
 ProfesorDep = Annotated[int, Depends(validar_profesor)]
-
-
+CarreraDep = Annotated[int, Depends(validar_carrera)]
+CentroOptDep = Annotated[int | None, Depends(centro_opcional)]
+CarreraOptDep = Annotated[int | None, Depends(carrera_opcional)]
 # --- Tareas de Fondo ---
 
 async def background_scraper_loop(lock: asyncio.Lock, client: httpx.AsyncClient):
     """
     Loop infinito que ejecuta el scrapeo cada 5 minutos.
+    Solo actualiza los ciclos más recientes.
     """
     while True:
         await asyncio.sleep(300) # 300 segundos = 5 minutos
         print("\n--- [TAREA DE FONDO] Iniciando scrapeo programado ---")
-        await scrape_and_update_db(lock, client)
+        await scrape_and_update_db(lock, client, num_ciclos_recientes=1, inicial=False)
 
 
 # --- Configuración y Ciclo de Vida de FastAPI ---
@@ -125,16 +200,27 @@ async def lifespan(app: FastAPI):
     print("Creando tablas de la base de datos...")
     create_db_and_tables()
     
-    # Ejecutar el primer scrapeo al inicio
+    # Ejecutar el primer scrapeo al inicio (con procesamiento de ciclos históricos)
     print("Ejecutando scrapeo inicial en segundo plano...")
+    print("  -> Se scrapeara 1 ciclo reciente")
+    print("  -> Se scrapearan hasta 10 ciclos históricos que NO tengan datos")
     asyncio.create_task(scrape_and_update_db(
+        app.state.scrape_lock, 
+        app.state.http_client,
+        num_ciclos_recientes=0,
+        inicial=True  # Esto habilita el scrapeo de ciclos históricos sin datos
+    ))
+    print("El scrapeo inicial esta corriendo. La aplicacion esta lista.")
+    
+    # Iniciar la tarea de fondo (solo ciclos recientes)
+    asyncio.create_task(background_scraper_loop(
         app.state.scrape_lock, 
         app.state.http_client
     ))
-    print("El scrapeo inicial esta corriendo. La aplicacion esta lista.")
-    # Iniciar la tarea de fondo
-    asyncio.create_task(background_scraper_loop(
-        app.state.scrape_lock, 
+
+    # Iniciar loop diario para actualización histórica condicional
+    asyncio.create_task(daily_historical_update_loop(
+        app.state.scrape_lock,
         app.state.http_client
     ))
 
@@ -152,22 +238,31 @@ app = FastAPI(lifespan=lifespan)
 @app.get("/materias/", response_model=list[MateriaPublic])
 def read_materias(
         session: SessionDep,
-        carrera: str | None = None,
+        ciclo: CicloDep,
+        carrera: CarreraOptDep = None,
+        centro: CentroOptDep = None,
         offset: int = 0,
-        limit: Annotated[int, Query(le=100)] = 100):
+        limit: Annotated[int, Query(le=1000)] = 1000):
 
-    stmt = select(Materia)
+    stmt = select(Materia).join(Seccion).where(
+        Seccion.id_ciclo == ciclo
+    )
+    
     if carrera is not None:
-        stmt = stmt.join(Carrera).where(Carrera.clave == carrera)
+        stmt = stmt.join(CarreraMateriaLink,  
+                        and_(CarreraMateriaLink.id_carrera == carrera, 
+                            CarreraMateriaLink.id_materia == Materia.id))
 
-    materias = session.exec(stmt.offset(offset).limit(limit)).all()
+    if centro is not None:
+        stmt = stmt.where(Seccion.id_centro == centro)
+
+    materias = session.exec(stmt.distinct().offset(offset).limit(limit)).all()
 
     result: list[MateriaPublic] = []
     for m in materias:
         result.append(MateriaPublic(
             clave=m.clave,
             nombre=m.nombre,
-            carrera=m.carrera.clave
         ))
     return result
 
@@ -210,22 +305,18 @@ def read_materia(session: SessionDep, materia: MateriaDep):
     return MateriaPublic(
                 clave=m.clave,
                 nombre=m.nombre,
-                carrera=m.carrera.clave
             )
-
-
 
 @app.get("/ciclos/", response_model=list[str])
 def read_ciclos(session: SessionDep):
     ciclos = session.exec(select(Ciclo)).all()
-    return [c.nombre for c in ciclos]
+    return sorted([c.nombre for c in ciclos], reverse=True)
 
 @app.get("/centros/", response_model=list[str])
 def read_centros(session: SessionDep):
     centros = session.exec(select(Centro)).all()
     result = []
     for c in centros:
-
         alias = ALIAS_CENTROS.get(c.nombre, "")
 
         centro_display = alias if alias else c.nombre
@@ -236,15 +327,12 @@ def read_centros(session: SessionDep):
 def read_carreras(session: SessionDep, ciclo: CicloDep, centro: CentroDep):
     statement = (
         select(Carrera)
-        .join(Materia)  
-        .join(Seccion)
-        .join(Centro)
-        .join(Ciclo)
-        .where(Centro.id == centro)
-        .where(Ciclo.id == ciclo)
+        .join(CarreraMateriaLink, CarreraMateriaLink.id_carrera == Carrera.id)
+        .join(Seccion, Seccion.id_materia == CarreraMateriaLink.id_materia)
+        .where(Seccion.id_centro == centro)
+        .where(Seccion.id_ciclo == ciclo)
         .distinct()
         )
-    
     carreras = session.exec(statement).all()
     return [CarreraPublic(clave=c.clave, nombre=c.nombre) for c in carreras]
 
@@ -448,20 +536,78 @@ async def verificar_resena(
 
 
 
+# --- Modelos para el endpoint de refresh ---
+class RefreshRequest(BaseModel):
+    ciclo: str = Field(description="Nombre del ciclo (ej: 2025A, 2025B)")
+    centro: str = Field(description="Nombre del centro universitario")
+    carrera: str = Field(description="Código de la carrera")
+    materia: str = Field(description="Clave de la materia")
+
+class RefreshResponse(BaseModel):
+    mensaje: str
+    status: str
+    detalles: dict | None = None
+
 # --- Endpoints de Admin ---
 
-@app.post("/admin/refresh")
-async def trigger_refresh(request: Request):
+@app.post("/admin/refresh", response_model=RefreshResponse)
+async def trigger_refresh(datos: RefreshRequest, request: Request, session: SessionDep):
+    """
+    Endpoint para refrescar una materia específica.
+    Inicia un worker asíncrono independiente del scraping principal.
+    
+    El usuario proporciona el nombre o alias del centro, el sistema lo resuelve internamente.
+    """
+    client = request.app.state.http_client
+    
+    # Obtener la clave (cup) del centro desde la BD
+    centro_clave, centro_nombre_real = obtener_clave_centro(datos.centro, session)
+    
+    # Crear una tarea asíncrona independiente que NO usa el lock global
+    async def refresh_task():
+        try:
+            resultado = await scrape_specific_materia(
+                client=client,
+                ciclo_nombre=datos.ciclo,
+                centro_clave=centro_clave,
+                carrera_codigo=datos.carrera,
+                materia_clave=datos.materia
+            )
+            if resultado:
+                print(f"Refresh completado exitosamente: {datos.materia}")
+            else:
+                print(f"Refresh falló: {datos.materia}")
+        except Exception as e:
+            print(f"Error en refresh task: {e}")
+    
+    # Iniciar la tarea en segundo plano
+    asyncio.create_task(refresh_task())
+    
+    return RefreshResponse(
+        mensaje="Proceso de actualización iniciado",
+        status="processing",
+        detalles={
+            "ciclo": datos.ciclo,
+            "centro": datos.centro,
+            "carrera": datos.carrera,
+            "materia": datos.materia
+        }
+    )
 
+@app.post("/admin/refresh-full")
+async def trigger_full_refresh(request: Request):
+    """
+    Endpoint para refrescar todos los ciclos recientes (scrapeo completo).
+    """
     lock = request.app.state.scrape_lock
     client = request.app.state.http_client
 
     if lock.locked():
-        raise HTTPException(status_code=429, detail="Un scrapeo ya está en curso.")
+        raise HTTPException(status_code=429, detail="Un scrapeo completo ya está en curso.")
     
     # Inicia la tarea en segundo plano y responde inmediatamente
-    asyncio.create_task(scrape_and_update_db(lock, client))
-    return {"message": "Proceso de actualización iniciado en segundo plano."}
+    asyncio.create_task(scrape_and_update_db(lock, client, num_ciclos_recientes=1, inicial=False))
+    return {"message": "Proceso de actualización completa iniciado en segundo plano."}
 
 
 

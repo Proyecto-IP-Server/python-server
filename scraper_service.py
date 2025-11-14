@@ -1,6 +1,8 @@
 import datetime
 import asyncio
 import httpx
+import json
+import os
 from bs4 import BeautifulSoup
 from sqlmodel import Session, select
 
@@ -13,10 +15,13 @@ BASE_URL = 'http://consulta.siiau.udg.mx/wco/'
 FORMA_CONSULTA_URL = f"{BASE_URL}sspseca.forma_consulta"
 LISTA_CARRERAS_URL = f"{BASE_URL}sspseca.lista_carreras"
 CONSULTA_OFERTA_URL = f"{BASE_URL}sspseca.consulta_oferta"
-NUM_WORKERS = 20 
+NUM_WORKERS = 29
 
-CANT_CICLOS_A_PROCESAR = None  # Limitar a 1 ciclo (el más reciente)
-CICLOS_A_PROCESAR = None  # CANT_CICLOS_A_PROCESAR DEBE SER None: 0 para 2025A, 1 para 2025V, 2 para 2025B, etc.
+# Configuración de ciclos a procesar
+CICLOS_RECIENTES_A_ACTUALIZAR = 1  # Cuántos ciclos recientes actualizar cada 5 minutos
+MAX_CICLOS_HISTORICOS = 0  # Máximo de ciclos históricos a scrapear inicialmente
+
+ERROR_LOG_FILE = "errores_scraper.json"  # Archivo para guardar errores
 
 # --- Funciones de Parseo y Scrapeo (Asíncronas) ---
 
@@ -100,7 +105,7 @@ async def get_carreras_for_centro_async(client: httpx.AsyncClient, centro_code):
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        for link in soup.find_all('a'):
+        for link in soup.find_all('a'): # type: ignore
             href = link.get('href', '')
             if 'javascript:asigna' in href:
                 try:
@@ -156,7 +161,12 @@ def parse_course_data(soup):
         })
     return courses_on_page
 
-async def get_courses_for_carrera_async(client: httpx.AsyncClient, ciclo_code, cup, majrp):
+async def get_courses_for_carrera_async(
+    client: httpx.AsyncClient, 
+    ciclo_code, 
+    cup, 
+    majrp, 
+):
     """
     Obtiene todos los cursos para una combinación, paginando de 200 en 200.
     """
@@ -184,10 +194,39 @@ async def get_courses_for_carrera_async(client: httpx.AsyncClient, ciclo_code, c
         except httpx.RequestError as e:
             print(f"\n  -> ADVERTENCIA: Error en la solicitud de cursos: {e}. Omitiendo esta carrera.")
             print(f"     Payload: {payload}\n")
+            
             break
     return all_courses
 
 # --- Lógica de Base de Datos y Orquestación ---
+
+def check_ciclo_has_data(session: Session, ciclo_code: str) -> bool:
+    """
+    Verifica si existe algún dato (secciones) para un ciclo específico.
+    """
+    # Primero obtener el nombre formateado del ciclo
+    year = ciclo_code[:4]
+    suffix_code = ciclo_code[4:]
+    
+    ciclo_nombre = None
+    if suffix_code == "10":
+        ciclo_nombre = f"{year}A"
+    elif suffix_code == "20":
+        ciclo_nombre = f"{year}B"
+    elif suffix_code == "80":
+        ciclo_nombre = f"{year}V"
+    
+    if not ciclo_nombre:
+        return False
+    
+    # Buscar el ciclo en la BD
+    ciclo_obj = session.exec(select(Ciclo).where(Ciclo.nombre == ciclo_nombre)).first()
+    if not ciclo_obj:
+        return False
+    
+    # Verificar si hay secciones para este ciclo
+    seccion = session.exec(select(Seccion).where(Seccion.id_ciclo == ciclo_obj.id).limit(1)).first()
+    return seccion is not None
 
 def get_or_create(session, model, defaults=None, **kwargs):
     """
@@ -224,8 +263,18 @@ async def process_center_data(
     # 1. Obtener/Crear Ciclo
     ciclo_obj, _ = get_or_create(session, Ciclo, nombre=ciclo_info["nombre"])
     
-    # 2. Obtener/Crear Centro
-    centro_obj, _ = get_or_create(session, Centro, nombre=centro_info["nombre"])
+    # 2. Obtener/Crear Centro (buscar por nombre, actualizar clave si no existe)
+    centro_obj, creado = get_or_create(
+        session, Centro, 
+        nombre=centro_info["nombre"],
+        defaults={"clave": centro_code}
+    )
+    # Si el centro ya existe pero no tiene clave, actualizarla
+    if not creado and not centro_obj.clave:
+        centro_obj.clave = centro_code
+        session.add(centro_obj)
+        session.commit()
+        session.refresh(centro_obj)
 
     # 3. Obtener Carreras para este centro
     carreras = await get_carreras_for_centro_async(client, centro_code)
@@ -260,7 +309,13 @@ async def process_center_data(
         carrera_obj, _ = get_or_create(session, Carrera, clave=carrera_code, nombre=carrera_info["nombre"])
 
         # 5. Obtener Cursos
-        cursos_encontrados = await get_courses_for_carrera_async(client, ciclo_code, centro_code, carrera_code)
+        cursos_encontrados = await get_courses_for_carrera_async(
+            client, 
+            ciclo_code, 
+            centro_code, 
+            carrera_code,
+
+        )
         
         if not cursos_encontrados:
 #           print(f"     0 cursos para {carrera_code}.")
@@ -275,9 +330,14 @@ async def process_center_data(
                 materia_obj, _ = get_or_create(
                     session, Materia,
                     clave=course["clave"],
-                    defaults={"nombre": course["materia"], "id_carrera": carrera_obj.id}
+                    defaults={"nombre": course["materia"]}
                 )
-
+                carreramateria_obj, _ = get_or_create(
+                    session, CarreraMateriaLink,
+                    id_carrera=carrera_obj.id,
+                    id_materia=materia_obj.id
+                )
+                
                 # 8. Obtener/Crear Profesor
                 prof_nombre = "SIN PROFESOR ASIGNADO" # Default
                 if course["profesores"] and course["profesores"][0]["nombre"]:
@@ -379,9 +439,22 @@ async def center_worker(queue: asyncio.Queue, client: httpx.AsyncClient):
             finally:
                 queue.task_done()
 
-async def scrape_and_update_db(lock: asyncio.Lock, client: httpx.AsyncClient):
+async def scrape_and_update_db(
+    lock: asyncio.Lock, 
+    client: httpx.AsyncClient,
+    num_ciclos_recientes: int = CICLOS_RECIENTES_A_ACTUALIZAR,
+    inicial: bool = False,
+    force_historical: bool = False
+):
     """
     Esta es la función principal que se llama desde main.py
+    
+    Args:
+        lock: Lock asíncrono para prevenir scraping concurrente
+        client: Cliente HTTP asíncrono
+        num_ciclos_recientes: Número de ciclos más recientes a procesar
+    inicial: Si es True, también procesa ciclos históricos sin datos
+    force_historical: Si es True, fuerza el re-scrapeo de ciclos históricos (ignora si ya tienen datos)
     """
     if lock.locked():
         print("Scrapeo ya en curso. Omitiendo esta ejecución.")
@@ -395,19 +468,41 @@ async def scrape_and_update_db(lock: asyncio.Lock, client: httpx.AsyncClient):
                 print("No se pudo obtener la configuración inicial. Abortando.")
                 return
 
+            # Obtener los N ciclos más recientes
+            
+            #ciclos_recientes = list(ciclos.items())[:num_ciclos_recientes]
+            ciclos_recientes = list(ciclos.items())[2:3]
+            ciclos_a_procesar = ciclos_recientes.copy()
 
+            
+            # Lógica para ciclos históricos
+            if force_historical:
+                print("\n[ACTUALIZACIÓN HISTÓRICA FORZADA] Se forzará el re-scrapeo de ciclos históricos.")
+                ciclos_historicos_forzados = list(ciclos.items())[num_ciclos_recientes:MAX_CICLOS_HISTORICOS]
+                print(f"  -> Se agregarán {len(ciclos_historicos_forzados)} ciclos históricos (forzados).")
+                ciclos_a_procesar.extend(ciclos_historicos_forzados)
+            elif inicial:
+                # Sólo agregar los ciclos que aún no tienen datos
+                print(f"\n[SCRAPEO INICIAL] Verificando ciclos históricos sin datos...")
+                with Session(engine) as session:
+                    ciclos_historicos = []
+                    for ciclo_code, ciclo_info in list(ciclos.items())[num_ciclos_recientes:MAX_CICLOS_HISTORICOS]:
+                        if not check_ciclo_has_data(session, ciclo_code):
+                            ciclos_historicos.append((ciclo_code, ciclo_info))
+                            print(f"  -> Ciclo {ciclo_info['nombre']} sin datos. Será scrapeado.")
+                    if ciclos_historicos:
+                        print(f"[SCRAPEO INICIAL] Se scrapearan {len(ciclos_historicos)} ciclos históricos adicionales.")
+                        ciclos_a_procesar.extend(ciclos_historicos)
+                    else:
+                        print("[SCRAPEO INICIAL] Todos los ciclos históricos ya tienen datos.")
 
-            # --- LIMITAR A 1 CICLO (EL MÁS RECIENTE) ---
-            if CANT_CICLOS_A_PROCESAR is not None:
-                ciclos_a_procesar = list(ciclos.items())[:CANT_CICLOS_A_PROCESAR]
-            elif CICLOS_A_PROCESAR is not None:
-                ciclos_a_procesar = [list(ciclos.items())[CICLOS_A_PROCESAR]]
-            else:
-                vacio = {}
-                ciclos_a_procesar = list(vacio.items())
             if not ciclos_a_procesar:
                 print("No hay ciclos para procesar.")
                 return
+
+            print(f"\nTotal de ciclos a procesar: {len(ciclos_a_procesar)}")
+            for _, info in ciclos_a_procesar:
+                print(f"  - {info['nombre']}")
 
             queue = asyncio.Queue()
 
@@ -417,14 +512,13 @@ async def scrape_and_update_db(lock: asyncio.Lock, client: httpx.AsyncClient):
                 for _ in range(NUM_WORKERS)
             ]
 
-            print(f"Iniciando {NUM_WORKERS} workers...")
+            print(f"\nIniciando {NUM_WORKERS} workers...")
 
             for ciclo_code, ciclo_info in ciclos_a_procesar:
                 print(f"\n--- PROCESANDO CICLO: {ciclo_code} ({ciclo_info['nombre']}) ---")
                 
                 for centro_code, centro_info in centros.items():
                     # Poner el trabajo en la cola
-                    # --- MODIFICADO: Añade 'None' para el filtro de carreras ---
                     await queue.put((ciclo_code, ciclo_info, centro_code, centro_info, None))
 
             # Poner señales de "None" en la cola para detener a los workers
@@ -443,78 +537,178 @@ async def scrape_and_update_db(lock: asyncio.Lock, client: httpx.AsyncClient):
             print(f"Error fatal durante el scrapeo: {e}")
 
 
-# --- NUEVA FUNCIÓN ---
-async def scrape_and_update_targeted(
-    lock: asyncio.Lock, 
-    client: httpx.AsyncClient, 
-    ciclo_nombre: str, 
-    centros_nombres: list[str], 
-    carreras_codigos: list[str]
+# --- FUNCIÓN DE SCRAPEO DIRIGIDO RÁPIDO ---
+async def scrape_specific_materia(
+    client: httpx.AsyncClient,
+    ciclo_nombre: str,
+    centro_clave: str,
+    carrera_codigo: str,
+    materia_clave: str
 ):
     """
-    Orquesta un proceso de scrapeo DIRIGIDO para centros y carreras específicas.
+    Scrapea una materia específica sin usar el lock global.
+    Retorna True si se encontró y procesó la materia, False si no.
+    
+    Args:
+        centro_clave: Código cup del centro (ej: 'D' para CUCEI)
     """
-    if lock.locked():
-        print("Scrapeo ya en curso. Omitiendo esta ejecución.")
-        return
+    print(f"\n--- SCRAPEO DIRIGIDO: {materia_clave} en {centro_clave} - {ciclo_nombre} ---")
+    
+    try:
+        # 1. Obtener mapeos
+        ciclos, centros = await get_initial_options_async(client)
+        if not ciclos or not centros:
+            print("No se pudo obtener la configuración inicial.")
+            return False
 
-    async with lock:
-        print("--- INICIANDO PROCESO DE SCRAPEO DIRIGIDO ---")
-        try:
-            # 1. Obtener los mapeos de nombres a códigos
-            ciclos, centros = await get_initial_options_async(client)
-            if not ciclos or not centros:
-                print("No se pudo obtener la configuración inicial. Abortando.")
-                return
+        # 2. Encontrar código del ciclo
+        target_ciclo_code = None
+        target_ciclo_info = None
+        for code, info in ciclos.items():
+            if info["nombre"] == ciclo_nombre:
+                target_ciclo_code = code
+                target_ciclo_info = info
+                break
+        
+        if not target_ciclo_code or not target_ciclo_info:
+            print(f"Ciclo '{ciclo_nombre}' no encontrado.")
+            return False
 
-            # 2. Encontrar el código del ciclo solicitado
-            target_ciclo_code = None
-            target_ciclo_info = None
-            for code, info in ciclos.items():
-                if info["nombre"] == ciclo_nombre:
-                    target_ciclo_code = code
-                    target_ciclo_info = info
-                    break
+        # 3. Verificar que el centro existe en SIIAU y obtener su info
+        if centro_clave not in centros:
+            print(f"Centro con clave '{centro_clave}' no encontrado en SIIAU.")
+            return False
+        
+        target_centro_code = centro_clave
+        target_centro_info = centros[centro_clave]
+
+        # 4. Obtener carreras del centro
+        carreras = await get_carreras_for_centro_async(client, target_centro_code)
+        if carrera_codigo not in carreras:
+            print(f"Carrera '{carrera_codigo}' no encontrada en {target_centro_info['nombre']}.")
+            return False
+
+        # 5. Obtener cursos de la carrera
+        print(f"Obteniendo cursos para {carrera_codigo}...")
+        cursos = await get_courses_for_carrera_async(
+            client, target_ciclo_code, target_centro_code, carrera_codigo
+        )
+
+        # 6. Filtrar solo la materia solicitada
+        cursos_materia = [c for c in cursos if c["clave"] == materia_clave]
+        
+        if not cursos_materia:
+            print(f"Materia '{materia_clave}' no encontrada en la oferta académica.")
+            return False
+
+        print(f"Encontradas {len(cursos_materia)} secciones de {materia_clave}. Procesando...")
+
+        # 7. Procesar con la BD
+        with Session(engine) as session:
+            # Obtener/Crear objetos base
+            ciclo_obj, _ = get_or_create(session, Ciclo, nombre=target_ciclo_info["nombre"])
+            centro_obj, creado = get_or_create(
+                session, Centro,
+                nombre=target_centro_info["nombre"],
+                defaults={"clave": target_centro_code}
+            )
+            # Si el centro ya existe pero no tiene clave, actualizarla
+            if not creado and not centro_obj.clave:
+                centro_obj.clave = target_centro_code
+                session.add(centro_obj)
+                session.commit()
+                session.refresh(centro_obj)
             
-            if not target_ciclo_code:
-                print(f"Ciclo '{ciclo_nombre}' no encontrado en SIIAU. Abortando.")
-                return
+            carrera_obj, _ = get_or_create(session, Carrera, clave=carrera_codigo, nombre=carreras[carrera_codigo]["nombre"])
 
-            # 3. Filtrar los centros solicitados
-            target_centros = [] # Lista de tuplas (code, info)
-            for code, info in centros.items():
-                if info["nombre"] in centros_nombres:
-                    target_centros.append((code, info))
+            # Procesar cada sección de la materia
+            for course in cursos_materia:
+                try:
+                    # Obtener/Crear Materia
+                    materia_obj, _ = get_or_create(
+                        session, Materia,
+                        clave=course["clave"],
+                        defaults={"nombre": course["materia"]}
+                    )
+                    carreramateria_obj, _ = get_or_create(
+                        session, CarreraMateriaLink,
+                        id_carrera=carrera_obj.id,
+                        id_materia=materia_obj.id
+                    )
+                    
+
+                    # Obtener/Crear Profesor
+                    prof_nombre = "SIN PROFESOR ASIGNADO"
+                    if course["profesores"] and course["profesores"][0]["nombre"]:
+                        prof_nombre = course["profesores"][0]["nombre"]
+                    profesor_obj, _ = get_or_create(session, Profesor, nombre=prof_nombre)
+
+                    # Obtener/Crear Seccion
+                    seccion_obj, seccion_creada = get_or_create(
+                        session, Seccion,
+                        nrc=course["nrc"],
+                        id_ciclo=ciclo_obj.id,
+                        defaults={
+                            "numero": course["seccion"],
+                            "id_materia": materia_obj.id,
+                            "id_profesor": profesor_obj.id,
+                            "id_centro": centro_obj.id,
+                            "cupos": int(course["cupos"]),
+                            "disponibilidad": int(course["disponibles"])
+                        }
+                    )
+                    
+                    if not seccion_creada:
+                        seccion_obj.cupos = int(course["cupos"])
+                        seccion_obj.disponibilidad = int(course["disponibles"])
+                        session.add(seccion_obj)
+                        session.commit()
+                    
+                    # Insertar Sesiones
+                    for horario in course["horarios"]:
+                        if not horario["aula"] or not horario["edificio"]:
+                            continue
+
+                        aula_obj, _ = get_or_create(
+                            session, Aula,
+                            salon=horario["aula"],
+                            edificio=horario["edificio"]
+                        )
+                        
+                        fecha_inicio_str, fecha_fin_str = horario["periodo"].split('-')
+                        fecha_inicio_parts = [int(s) for s in fecha_inicio_str.strip().split('/')]
+                        fecha_fin_parts = [int(s) for s in fecha_fin_str.strip().split('/')]
+                        
+                        fecha_inicio = datetime.date(day=fecha_inicio_parts[0], month=fecha_inicio_parts[1], year=fecha_inicio_parts[2] + 2000)
+                        fecha_fin = datetime.date(day=fecha_fin_parts[0], month=fecha_fin_parts[1], year=fecha_fin_parts[2] + 2000)
+
+                        hora_inicio_str, hora_fin_str = horario["horas"].split('-')
+                        hora_inicio = datetime.time(hour=int(hora_inicio_str[:2]), minute=int(hora_inicio_str[2:]))
+                        hora_fin = datetime.time(hour=int(hora_fin_str[:2]), minute=int(hora_fin_str[2:]))
+
+                        dias_semana = horario["dias"].split(' ')
+                        for i, c in enumerate(dias_semana, 1):
+                            if c != ".":
+                                sesion_obj, _ = get_or_create(
+                                    session, Sesion,
+                                    id_seccion=seccion_obj.id,
+                                    id_aula=aula_obj.id,
+                                    fecha_inicio=fecha_inicio,
+                                    fecha_fin=fecha_fin,
+                                    hora_inicio=hora_inicio,
+                                    hora_fin=hora_fin,
+                                    dia_semana=i
+                                )
+                except Exception as e:
+                    print(f"Error procesando NRC {course.get('nrc')}: {e}")
+                    session.rollback()
             
-            if not target_centros:
-                print(f"Ninguno de los centros solicitados ({', '.join(centros_nombres)}) fue encontrado. Abortando.")
-                return
+            session.commit()
+        
+        print(f"✓ Scrapeo dirigido de {materia_clave} completado exitosamente.")
+        return True
 
-            # 4. Crear cola y workers
-            queue = asyncio.Queue()
-            workers = [asyncio.create_task(center_worker(queue, client)) for _ in range(NUM_WORKERS)]
-
-            print(f"Iniciando {NUM_WORKERS} workers para {len(target_centros)} centros dirigidos...")
-
-            # 5. Poner trabajos en la cola (esta vez con el filtro de carreras)
-            for centro_code, centro_info in target_centros:
-                await queue.put((
-                    target_ciclo_code, 
-                    target_ciclo_info, 
-                    centro_code, 
-                    centro_info, 
-                    carreras_codigos  # <-- Aquí pasamos el filtro
-                ))
-
-            # 6. Enviar señales de fin a los workers
-            for _ in range(NUM_WORKERS):
-                await queue.put(None)
-            
-            await queue.join()
-            await asyncio.gather(*workers)
-
-            print("--- PROCESO DE SCRAPEO DIRIGIDO COMPLETADO ---")
-
-        except Exception as e:
-            print(f"Error fatal durante el scrapeo dirigido: {e}")
+    except Exception as e:
+        print(f"Error en scrapeo dirigido: {e}")
+        return False
 
