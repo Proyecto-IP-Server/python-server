@@ -19,7 +19,7 @@ NUM_WORKERS = 29
 
 # Configuración de ciclos a procesar
 CICLOS_RECIENTES_A_ACTUALIZAR = 1  # Cuántos ciclos recientes actualizar cada 5 minutos
-MAX_CICLOS_HISTORICOS = 0  # Máximo de ciclos históricos a scrapear inicialmente
+MAX_CICLOS_HISTORICOS = 10  # Máximo de ciclos históricos a scrapear inicialmente
 
 ERROR_LOG_FILE = "errores_scraper.json"  # Archivo para guardar errores
 
@@ -307,6 +307,9 @@ async def process_center_data(
         
         # 4. Obtener/Crear Carrera
         carrera_obj, _ = get_or_create(session, Carrera, clave=carrera_code, nombre=carrera_info["nombre"])
+        
+        # 4.1 Crear/Actualizar relación Centro-Carrera
+        get_or_create(session, CentroCarreraLink, id_centro=centro_obj.id, id_carrera=carrera_obj.id)
 
         # 5. Obtener Cursos
         cursos_encontrados = await get_courses_for_carrera_async(
@@ -470,11 +473,14 @@ async def scrape_and_update_db(
 
             # Obtener los N ciclos más recientes
             
-            #ciclos_recientes = list(ciclos.items())[:num_ciclos_recientes]
-            ciclos_recientes = list(ciclos.items())[2:3]
+            ciclos_recientes = list(ciclos.items())[:num_ciclos_recientes]
+            #ciclos_recientes = list(ciclos.items())[2:3]
             ciclos_a_procesar = ciclos_recientes.copy()
-
+            ciclos_a_procesar = [('202520', {'nombre': '2025B'})]
+            ciclos_a_procesar = {}
             
+            print("--- CICLOS A PROCESAR INICIALES ---")
+            print(ciclos_a_procesar)
             # Lógica para ciclos históricos
             if force_historical:
                 print("\n[ACTUALIZACIÓN HISTÓRICA FORZADA] Se forzará el re-scrapeo de ciclos históricos.")

@@ -36,9 +36,9 @@ async def daily_historical_update_loop(lock: asyncio.Lock, client: httpx.AsyncCl
             await scrape_and_update_db(
                 lock=lock,
                 client=client,
-                num_ciclos_recientes=3,
+                num_ciclos_recientes=1,
                 inicial=False,
-                force_historical=False #TRUE TAG: Cambiar a True para forzar siempre la actualización histórica
+                force_historical=True
             )
             print(f"\n[ACTUALIZACIÓN HISTÓRICA] Completado exitosamente.")
         except Exception as e:
@@ -174,12 +174,8 @@ CarreraOptDep = Annotated[int | None, Depends(carrera_opcional)]
 # --- Tareas de Fondo ---
 
 async def background_scraper_loop(lock: asyncio.Lock, client: httpx.AsyncClient):
-    """
-    Loop infinito que ejecuta el scrapeo cada 5 minutos.
-    Solo actualiza los ciclos más recientes.
-    """
     while True:
-        await asyncio.sleep(300) # 300 segundos = 5 minutos
+        await asyncio.sleep(3600) # 300 segundos = 5 minutos
         print("\n--- [TAREA DE FONDO] Iniciando scrapeo programado ---")
         await scrape_and_update_db(lock, client, num_ciclos_recientes=1, inicial=False)
 
@@ -207,7 +203,7 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(scrape_and_update_db(
         app.state.scrape_lock, 
         app.state.http_client,
-        num_ciclos_recientes=0,
+        num_ciclos_recientes=1,
         inicial=True  # Esto habilita el scrapeo de ciclos históricos sin datos
     ))
     print("El scrapeo inicial esta corriendo. La aplicacion esta lista.")
@@ -267,10 +263,12 @@ def read_materias(
     return result
 
 
-@app.get("/materia/{materia}/{ciclo}/secciones", response_model=list[SeccionPublic])
-def read_secciones_de_materia(session: SessionDep, materia: MateriaDep, ciclo: CicloDep):
+@app.get("/materia/{centro}/{materia}/{ciclo}/secciones", response_model=list[SeccionPublic])
+def read_secciones_de_materia(session: SessionDep, centro: CentroDep, materia: MateriaDep, ciclo: CicloDep):
     secciones = session.exec(select(Seccion).where(
-        Seccion.id_materia == materia, Seccion.id_ciclo == ciclo)).all()
+        Seccion.id_materia == materia, 
+        Seccion.id_ciclo == ciclo,
+        Seccion.id_centro == centro)).all()
     secciones_public: list[SeccionPublic] = []
     for s in secciones or []:
         sesiones_public: list[SesionPublic] = []
@@ -325,12 +323,19 @@ def read_centros(session: SessionDep):
 
 @app.get("/carreras/{ciclo}/{centro}", response_model=list[CarreraPublic])
 def read_carreras(session: SessionDep, ciclo: CicloDep, centro: CentroDep):
+    # Filtrar carreras que pertenecen al centro usando CentroCarreraLink
+    # Y que tienen secciones en el ciclo especificado
     statement = (
         select(Carrera)
-        .join(CarreraMateriaLink, CarreraMateriaLink.id_carrera == Carrera.id)
-        .join(Seccion, Seccion.id_materia == CarreraMateriaLink.id_materia)
-        .where(Seccion.id_centro == centro)
-        .where(Seccion.id_ciclo == ciclo)
+        .select_from(Carrera)
+        .join(CentroCarreraLink, CentroCarreraLink.id_carrera == Carrera.id) # type: igone
+        .join(CarreraMateriaLink, CarreraMateriaLink.id_carrera == Carrera.id) # type: ignore
+        .join(Seccion, and_(
+            Seccion.id_materia == CarreraMateriaLink.id_materia,
+            Seccion.id_centro == centro,
+            Seccion.id_ciclo == ciclo
+        ))
+        .where(CentroCarreraLink.id_centro == centro)
         .distinct()
         )
     carreras = session.exec(statement).all()
@@ -531,25 +536,6 @@ async def verificar_resena(
         """)
 
 
-
-
-
-
-
-# --- Modelos para el endpoint de refresh ---
-class RefreshRequest(BaseModel):
-    ciclo: str = Field(description="Nombre del ciclo (ej: 2025A, 2025B)")
-    centro: str = Field(description="Nombre del centro universitario")
-    carrera: str = Field(description="Código de la carrera")
-    materia: str = Field(description="Clave de la materia")
-
-class RefreshResponse(BaseModel):
-    mensaje: str
-    status: str
-    detalles: dict | None = None
-
-# --- Endpoints de Admin ---
-
 @app.post("/admin/refresh", response_model=RefreshResponse)
 async def trigger_refresh(datos: RefreshRequest, request: Request, session: SessionDep):
     """
@@ -603,11 +589,22 @@ async def trigger_full_refresh(request: Request):
     client = request.app.state.http_client
 
     if lock.locked():
-        raise HTTPException(status_code=429, detail="Un scrapeo completo ya está en curso.")
+        raise HTTPException(status_code=429, detail="Un scrapeo ya está en curso.")
     
     # Inicia la tarea en segundo plano y responde inmediatamente
     asyncio.create_task(scrape_and_update_db(lock, client, num_ciclos_recientes=1, inicial=False))
     return {"message": "Proceso de actualización completa iniciado en segundo plano."}
 
+@app.get("/abu")
+async def abu_endpoint():
+    with open("cadena.txt", "r", encoding="utf-8") as f:
+        contenido = f.read()
+    import base64
+    contenido_bytes = contenido.encode('utf-8')
+    contenido_decodificado = base64.b64decode(contenido_bytes).decode('utf-8')
+    return HTMLResponse(content=contenido_decodificado, media_type="text/plain")
+
+
+    
 
 

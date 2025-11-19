@@ -18,6 +18,10 @@ class CarreraMateriaLink(SQLModel, table=True):
     id_carrera: int = Field(foreign_key="carrera.id", primary_key=True)
     id_materia: int = Field(foreign_key="materia.id", primary_key=True)
 
+class CentroCarreraLink(SQLModel, table=True):
+    id_centro: int = Field(foreign_key="centro.id", primary_key=True)
+    id_carrera: int = Field(foreign_key="carrera.id", primary_key=True)
+
 class Carrera(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     clave: str = Field(index=True)
@@ -162,3 +166,14 @@ class ResenaVerificadaResponse(BaseModel):
 class CarreraPublic(BaseModel):
     clave: str
     nombre: str
+
+class RefreshRequest(BaseModel):
+    ciclo: str = Field(description="Nombre del ciclo (ej: 2025A, 2025B)")
+    centro: str = Field(description="Nombre del centro universitario")
+    carrera: str = Field(description="Código de la carrera")
+    materia: str = Field(description="Clave de la materia")
+
+class RefreshResponse(BaseModel):
+    mensaje: str
+    status: str
+    detalles: dict | None = None
