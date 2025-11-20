@@ -179,3 +179,10 @@ class RefreshResponse(BaseModel):
     mensaje: str
     status: str
     detalles: dict | None = None
+    
+class SoporteRequest(BaseModel):
+    nombre: str
+    tipo: str
+    mensaje: str
+    imagen: str | None = None 
+    fecha: str

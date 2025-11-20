@@ -16,11 +16,11 @@ import os
 from database import SessionDep, create_db_and_tables
 from models import *
 from scraper_service import scrape_and_update_db, scrape_specific_materia
-from email_service import enviar_enlace_verificacion
+from email_service import enviar_enlace_verificacion, enviar_reporte_soporte
 import hashlib
 
 # --- Configuración de Actualización Histórica ---
-HISTORICAL_UPDATE_INTERVAL_HOURS = 24  # Cada cuántas horas actualizar ciclos históricos (ajustable)
+HISTORICAL_UPDATE_INTERVAL_HOURS = 24  
 
 async def daily_historical_update_loop(lock: asyncio.Lock, client: httpx.AsyncClient):
     while True:
@@ -329,7 +329,7 @@ def read_carreras(session: SessionDep, ciclo: CicloDep, centro: CentroDep):
     statement = (
         select(Carrera)
         .select_from(Carrera)
-        .join(CentroCarreraLink, CentroCarreraLink.id_carrera == Carrera.id) # type: igone
+        .join(CentroCarreraLink, CentroCarreraLink.id_carrera == Carrera.id) # type: ignore
         .join(CarreraMateriaLink, CarreraMateriaLink.id_carrera == Carrera.id) # type: ignore
         .join(Seccion, and_(
             Seccion.id_materia == CarreraMateriaLink.id_materia,
@@ -605,7 +605,11 @@ async def abu_endpoint():
     contenido_decodificado = base64.b64decode(contenido_bytes).decode('utf-8')
     return HTMLResponse(content=contenido_decodificado, media_type="text/plain")
 
-
-    
-
-
+@app.post("/soporte")
+async def recibir_soporte(datos: SoporteRequest):
+    try:
+        await enviar_reporte_soporte(datos)
+        return {"mensaje": "Reporte enviado correctamente", "status": "success"}
+    except Exception as e:
+        print(f"Error en endpoint soporte: {e}")
+        raise HTTPException(status_code=500, detail="Error interno al enviar el reporte")

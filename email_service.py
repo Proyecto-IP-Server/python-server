@@ -4,6 +4,9 @@ from dotenv import load_dotenv
 from fastapi_mail import FastMail, MessageSchema, ConnectionConfig, MessageType
 from pydantic import EmailStr
 
+import base64
+import tempfile
+import imghdr
 
 env_path = Path(__file__).parent / ".env"
 load_dotenv(dotenv_path=env_path)
@@ -65,3 +68,73 @@ async def enviar_enlace_verificacion(correo_destino: EmailStr, codigo: str, base
     
 
         raise
+
+async def enviar_reporte_soporte(datos):
+    admin_email = os.getenv("MAIL_FROM", "") 
+    
+    html_body = f"""
+    <html>
+        <body style="font-family: Arial, sans-serif; padding: 20px;">
+            <h2 style="color: #007AFF;">Nuevo Reporte de Soporte</h2>
+            <p><strong>De:</strong> {datos.nombre}</p>
+            <p><strong>Tipo:</strong> {datos.tipo}</p>
+            <p><strong>Fecha:</strong> {datos.fecha}</p>
+            <hr>
+            <h3>Mensaje:</h3>
+            <p style="background-color: #f5f5f5; padding: 15px; border-radius: 5px;">
+                {datos.mensaje}
+            </p>
+        </body>
+    </html>
+    """
+
+    adjuntos = []
+    temp_file = None
+
+    if datos.imagen:
+        try:
+            if "," in datos.imagen:
+                header, encoded = datos.imagen.split(",", 1)
+            else:
+                encoded = datos.imagen
+                header = ""
+
+            data = base64.b64decode(encoded)
+            
+            extension = imghdr.what(None, h=data)
+            
+            if not extension:
+                if header and "/" in header and ";" in header:
+                    try:
+                        extension = header.split(";")[0].split("/")[1]
+                    except IndexError:
+                        extension = "jpg" 
+                else:
+                    extension = "jpg"
+
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=f".{extension}")
+            temp_file.write(data)
+            temp_file.close()
+            
+            adjuntos.append(temp_file.name)
+
+        except Exception as e:
+            print(f"Error procesando imagen adjunta: {e}")
+            html_body += f"<p style='color:red'>Error adjuntando imagen: {e}</p>"
+
+    mensaje = MessageSchema(
+        subject=f"Soporte App: {datos.tipo} - {datos.nombre}",
+        recipients=[admin_email],
+        body=html_body,
+        subtype=MessageType.html,
+        attachments=adjuntos
+    )
+
+    try:
+        await fastmail.send_message(mensaje)
+    except Exception as e:
+        print(f"Error al enviar correo de soporte: {e}")
+        raise e
+    finally:
+        if temp_file and os.path.exists(temp_file.name):
+            os.unlink(temp_file.name)
