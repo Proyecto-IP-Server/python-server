@@ -40,6 +40,7 @@ class Alumno(SQLModel, table=True):
 class Materia(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     clave: str = Field(unique=True, index=True)
+    creditos: int = Field()
     nombre: str = Field()
     carreras: list["Carrera"] = Relationship(back_populates="materias", link_model = CarreraMateriaLink)
 
@@ -121,6 +122,7 @@ class Sesion(SQLModel, table=True):
 class MateriaPublic(BaseModel):
     clave: str
     nombre: str
+    creditos: int
 
 
 class SeccionPublic(BaseModel):

@@ -259,6 +259,7 @@ def read_materias(
         result.append(MateriaPublic(
             clave=m.clave,
             nombre=m.nombre,
+            creditos=m.creditos
         ))
     return result
 
@@ -303,6 +304,7 @@ def read_materia(session: SessionDep, materia: MateriaDep):
     return MateriaPublic(
                 clave=m.clave,
                 nombre=m.nombre,
+                creditos=m.creditos
             )
 
 @app.get("/ciclos/", response_model=list[str])
@@ -323,8 +325,7 @@ def read_centros(session: SessionDep):
 
 @app.get("/carreras/{ciclo}/{centro}", response_model=list[CarreraPublic])
 def read_carreras(session: SessionDep, ciclo: CicloDep, centro: CentroDep):
-    # Filtrar carreras que pertenecen al centro usando CentroCarreraLink
-    # Y que tienen secciones en el ciclo especificado
+
     statement = (
         select(Carrera)
         .select_from(Carrera)
@@ -385,12 +386,12 @@ async def solicitar_resena(
     session: SessionDep, 
     request: Request
 ):
-    # Validar y obtener IDs usando las funciones de validación
+
     id_alumno = validar_alumno(datos.correo_alumno, session)
     id_materia = validar_materia(datos.clave_materia, session)
     id_profesor = validar_profesor(datos.nombre_profesor, session)
     
-    # Buscar si ya hay una reseña del mismo alumno para esa materia y profesor
+
     resena_existente = session.exec(
         select(Resena).where(
             Resena.id_profesor == id_profesor,

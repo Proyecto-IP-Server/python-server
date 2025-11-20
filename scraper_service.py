@@ -19,7 +19,7 @@ NUM_WORKERS = 29
 
 # Configuración de ciclos a procesar
 CICLOS_RECIENTES_A_ACTUALIZAR = 1  # Cuántos ciclos recientes actualizar cada 5 minutos
-MAX_CICLOS_HISTORICOS = 10  # Máximo de ciclos históricos a scrapear inicialmente
+MAX_CICLOS_HISTORICOS = 0  # Máximo de ciclos históricos a scrapear inicialmente
 
 ERROR_LOG_FILE = "errores_scraper.json"  # Archivo para guardar errores
 
@@ -332,6 +332,7 @@ async def process_center_data(
                 # 7. Obtener/Crear Materia
                 materia_obj, _ = get_or_create(
                     session, Materia,
+                    creditos=int(course["creditos"]),
                     clave=course["clave"],
                     defaults={"nombre": course["materia"]}
                 )
@@ -477,7 +478,7 @@ async def scrape_and_update_db(
             #ciclos_recientes = list(ciclos.items())[2:3]
             ciclos_a_procesar = ciclos_recientes.copy()
             ciclos_a_procesar = [('202520', {'nombre': '2025B'})]
-            ciclos_a_procesar = {}
+            #ciclos_a_procesar = {}
             
             print("--- CICLOS A PROCESAR INICIALES ---")
             print(ciclos_a_procesar)
