@@ -17,11 +17,11 @@ conf = ConnectionConfig(
     MAIL_PASSWORD=os.getenv("MAIL_PASSWORD", ""),
     MAIL_FROM=os.getenv("MAIL_FROM", ""),
     MAIL_FROM_NAME="Mi Horario UdG",
-    MAIL_PORT=int(os.getenv("MAIL_PORT", "")),
-    MAIL_SERVER=os.getenv("MAIL_SERVER", ""),
+    MAIL_PORT=int(os.getenv("MAIL_PORT", "25")),
+    MAIL_SERVER=os.getenv("MAIL_SERVER", "localhost"),
     MAIL_STARTTLS=os.getenv("MAIL_STARTTLS", "").lower() == "true",
     MAIL_SSL_TLS=os.getenv("MAIL_SSL_TLS", "").lower() == "true",
-    USE_CREDENTIALS=True,
+    USE_CREDENTIALS=os.getenv("MAIL_USE_CREDENTIALS", "").lower() == "true",
     VALIDATE_CERTS=True
 )
 

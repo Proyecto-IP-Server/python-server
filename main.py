@@ -48,8 +48,13 @@ async def daily_historical_update_loop(lock: asyncio.Lock, client: httpx.AsyncCl
 
 # Cargar alias de centros
 ALIAS_CENTROS_PATH = os.path.join(os.path.dirname(__file__), "alias_centros.json")
+alias_a_centro = {}
+centro_a_alias = {}
 with open(ALIAS_CENTROS_PATH, 'r', encoding='utf-8') as f:
-    ALIAS_CENTROS = json.load(f)
+    for nombre, alias in json.load(f).items():
+        if nombre and alias:
+            alias_a_centro[alias] = nombre
+            centro_a_alias[nombre] = alias
 
 # --- Dependencias de Endpoints ---
 
@@ -69,22 +74,10 @@ def validar_materia(materia: str, session: SessionDep) -> int:
     return id_materia
 
 def validar_centro(centro: str, session: SessionDep) -> int:
+    if centro in alias_a_centro:
+        centro = alias_a_centro[centro]
 
-    id_centro = session.exec(select(Centro.id).where(
-        Centro.nombre == centro)).first()
-    
-    if id_centro is None:
-
-        nombre_original = None
-        for nombre, alias in ALIAS_CENTROS.items():
-            if alias == centro:
-                nombre_original = nombre
-                break
-        
-        if nombre_original:
-            id_centro = session.exec(select(Centro.id).where(
-                Centro.nombre == nombre_original)).first()
-    
+    id_centro = session.exec(select(Centro.id).where(Centro.nombre == centro)).first()
     if id_centro is None:
         raise HTTPException(status_code=404, detail="Centro no encontrado")
     return id_centro
@@ -95,20 +88,9 @@ def centro_opcional(session: SessionDep, centro: str | None = None) -> int | Non
     return validar_centro(centro, session)
 
 def obtener_clave_centro(centro_nombre: str, session: SessionDep) -> tuple[str, str]:
-
+    if centro_nombre in alias_a_centro:
+        centro_nombre = alias_a_centro[centro_nombre]
     centro = session.exec(select(Centro).where(Centro.nombre == centro_nombre)).first()
-    
-    if centro is None:
-
-        nombre_original = None
-        for nombre, alias in ALIAS_CENTROS.items():
-            if alias == centro_nombre:
-                nombre_original = nombre
-                break
-        
-        if nombre_original:
-            centro = session.exec(select(Centro).where(Centro.nombre == nombre_original)).first()
-    
     if centro is None:
         raise HTTPException(
             status_code=404, 
@@ -315,12 +297,7 @@ def read_ciclos(session: SessionDep):
 @app.get("/centros/", response_model=list[str])
 def read_centros(session: SessionDep):
     centros = session.exec(select(Centro)).all()
-    result = []
-    for c in centros:
-        alias = ALIAS_CENTROS.get(c.nombre, "")
-
-        centro_display = alias if alias else c.nombre
-        result.append(centro_display)
+    result = [centro_a_alias.get(c.nombre, c.nombre) for c in centros]
     return sorted(result)
 
 @app.get("/carreras/{ciclo}/{centro}", response_model=list[CarreraPublic])
@@ -429,7 +406,7 @@ async def solicitar_resena(
         pendiente_existente.contenido = datos.contenido
         pendiente_existente.satisfaccion = datos.satisfaccion
         pendiente_existente.codigo = codigo
-        pendiente_existente.fecha_creacion = datetime.datetime.utcnow()
+        pendiente_existente.fecha_creacion = datetime.datetime.now(datetime.timezone.utc)
         session.commit()
     else:
 
