@@ -20,18 +20,19 @@ from email_service import enviar_enlace_verificacion, enviar_reporte_soporte
 import hashlib
 
 # --- Configuración de Actualización Histórica ---
-HISTORICAL_UPDATE_INTERVAL_HOURS = 24  
+HISTORICAL_UPDATE_INTERVAL_HOURS = 24
+
 
 async def daily_historical_update_loop(lock: asyncio.Lock, client: httpx.AsyncClient):
     while True:
 
         await asyncio.sleep(HISTORICAL_UPDATE_INTERVAL_HOURS * 60 * 60)
-        
+
         print(f"\n{'='*60}")
         print(f"[ACTUALIZACIÓN HISTÓRICA] Iniciando scrapeo de ciclos históricos...")
         print(f"  Intervalo: cada {HISTORICAL_UPDATE_INTERVAL_HOURS} horas")
         print(f"{'='*60}")
-        
+
         try:
             await scrape_and_update_db(
                 lock=lock,
@@ -47,7 +48,8 @@ async def daily_historical_update_loop(lock: asyncio.Lock, client: httpx.AsyncCl
             traceback.print_exc()
 
 # Cargar alias de centros
-ALIAS_CENTROS_PATH = os.path.join(os.path.dirname(__file__), "alias_centros.json")
+ALIAS_CENTROS_PATH = os.path.join(
+    os.path.dirname(__file__), "alias_centros.json")
 alias_a_centro = {}
 centro_a_alias = {}
 with open(ALIAS_CENTROS_PATH, 'r', encoding='utf-8') as f:
@@ -58,7 +60,8 @@ with open(ALIAS_CENTROS_PATH, 'r', encoding='utf-8') as f:
 
 # --- Dependencias de Endpoints ---
 
-def validar_ciclo(ciclo: str, session: SessionDep) -> int:
+
+def validar_ciclo(session: SessionDep, ciclo: str) -> int:
     id_ciclo = session.exec(select(Ciclo.id).where(
         Ciclo.nombre == ciclo)).first()
     if id_ciclo is None:
@@ -66,72 +69,92 @@ def validar_ciclo(ciclo: str, session: SessionDep) -> int:
     return id_ciclo
 
 
-def validar_materia(materia: str, session: SessionDep) -> int:
+def validar_materia(session: SessionDep, materia: str) -> int:
     id_materia = session.exec(select(Materia.id).where(
         Materia.clave == materia)).first()
     if id_materia is None:
         raise HTTPException(status_code=404, detail="Materia no encontrada")
     return id_materia
 
-def validar_centro(centro: str, session: SessionDep) -> int:
+
+def materia_opcional(session: SessionDep, materia: str | None = None) -> int | None:
+    if materia is None:
+        return None
+    return validar_materia(session, materia)
+
+
+def validar_centro(session: SessionDep, centro: str) -> int:
     if centro in alias_a_centro:
         centro = alias_a_centro[centro]
 
-    id_centro = session.exec(select(Centro.id).where(Centro.nombre == centro)).first()
+    id_centro = session.exec(select(Centro.id).where(
+        Centro.nombre == centro)).first()
     if id_centro is None:
         raise HTTPException(status_code=404, detail="Centro no encontrado")
     return id_centro
 
+
 def centro_opcional(session: SessionDep, centro: str | None = None) -> int | None:
     if centro is None:
         return None
-    return validar_centro(centro, session)
+    return validar_centro(session, centro)
+
 
 def obtener_clave_centro(centro_nombre: str, session: SessionDep) -> tuple[str, str]:
     if centro_nombre in alias_a_centro:
         centro_nombre = alias_a_centro[centro_nombre]
-    centro = session.exec(select(Centro).where(Centro.nombre == centro_nombre)).first()
+    centro = session.exec(select(Centro).where(
+        Centro.nombre == centro_nombre)).first()
     if centro is None:
         raise HTTPException(
-            status_code=404, 
+            status_code=404,
             detail=f"Centro '{centro_nombre}' no encontrado. Debe ejecutarse el scraping principal primero."
         )
-    
+
     if centro.clave is None:
         raise HTTPException(
-            status_code=400, 
+            status_code=400,
             detail=f"Centro '{centro.nombre}' no tiene clave asignada. Se asignará en el próximo scraping automático."
         )
-    
+
     return centro.clave, centro.nombre
 
-def validar_alumno(correo_alumno: str, session: SessionDep) -> int:
+
+def validar_alumno(session: SessionDep, correo_alumno: str) -> int:
     if not correo_alumno.endswith("@alumnos.udg.mx"):
         raise HTTPException(
-            status_code=400, 
+            status_code=400,
             detail="No es un correo válido de alumno (@alumnos.udg.mx)"
         )
-    
+
     alumno = session.exec(select(Alumno)
-                        .where(Alumno.correo == correo_alumno)).first()
+                          .where(Alumno.correo == correo_alumno)).first()
     if alumno is None:
         # Crear alumno si no existe
         alumno = Alumno(correo=correo_alumno)
         session.add(alumno)
         session.commit()
         session.refresh(alumno)
-    
+
     if alumno.id is None:
-        raise HTTPException(status_code=500, detail="Error" )
-    
+        raise HTTPException(status_code=500, detail="Error")
+
     return alumno.id
 
-def validar_profesor(nombre_profesor: str, session: SessionDep) -> int:
+
+def validar_profesor(session: SessionDep, profesor: str) -> int:
     id_profesor = session.exec(select(Profesor.id).where(
-        Profesor.nombre == nombre_profesor)).first()
+        Profesor.nombre == profesor)).first()
     if id_profesor is None:
         raise HTTPException(status_code=404, detail="Profesor no encontrado")
     return id_profesor
+
+
+def profesor_opcional(session: SessionDep, profesor: str | None = None) -> int | None:
+    if profesor is None:
+        return None
+    return validar_profesor(session, profesor)
+
 
 def validar_carrera(carrera: str, session: SessionDep) -> int:
     id_carrera = session.exec(select(Carrera.id).where(
@@ -140,10 +163,12 @@ def validar_carrera(carrera: str, session: SessionDep) -> int:
         raise HTTPException(status_code=404, detail="Carrera no encontrada")
     return id_carrera
 
+
 def carrera_opcional(session: SessionDep, carrera: str | None = None) -> int | None:
     if carrera is None:
         return None
     return validar_carrera(carrera, session)
+
 
 CicloDep = Annotated[int, Depends(validar_ciclo)]
 MateriaDep = Annotated[int, Depends(validar_materia)]
@@ -151,13 +176,16 @@ CentroDep = Annotated[int, Depends(validar_centro)]
 AlumnoDep = Annotated[int, Depends(validar_alumno)]
 ProfesorDep = Annotated[int, Depends(validar_profesor)]
 CarreraDep = Annotated[int, Depends(validar_carrera)]
+MateriaOptDep = Annotated[int | None, Depends(materia_opcional)]
 CentroOptDep = Annotated[int | None, Depends(centro_opcional)]
+ProfesorOptDep = Annotated[int | None, Depends(profesor_opcional)]
 CarreraOptDep = Annotated[int | None, Depends(carrera_opcional)]
 # --- Tareas de Fondo ---
 
+
 async def background_scraper_loop(lock: asyncio.Lock, client: httpx.AsyncClient):
     while True:
-        await asyncio.sleep(3600) # 300 segundos = 5 minutos
+        await asyncio.sleep(3600)  # 300 segundos = 5 minutos
         print("\n--- [TAREA DE FONDO] Iniciando scrapeo programado ---")
         await scrape_and_update_db(lock, client, num_ciclos_recientes=1, inicial=False)
 
@@ -173,26 +201,26 @@ async def lifespan(app: FastAPI):
             "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.0.0 Safari/537.36"
         }
     )
-    
+
     # Crear tablas
     print("Creando tablas de la base de datos...")
     create_db_and_tables()
-    
+
     # Ejecutar el primer scrapeo al inicio (con procesamiento de ciclos históricos)
     print("Ejecutando scrapeo inicial en segundo plano...")
     print("  -> Se scrapeara 1 ciclo reciente")
     print("  -> Se scrapearan hasta 10 ciclos históricos que NO tengan datos")
     asyncio.create_task(scrape_and_update_db(
-        app.state.scrape_lock, 
+        app.state.scrape_lock,
         app.state.http_client,
         num_ciclos_recientes=1,
         inicial=True  # Esto habilita el scrapeo de ciclos históricos sin datos
     ))
     print("El scrapeo inicial esta corriendo. La aplicacion esta lista.")
-    
+
     # Iniciar la tarea de fondo (solo ciclos recientes)
     asyncio.create_task(background_scraper_loop(
-        app.state.scrape_lock, 
+        app.state.scrape_lock,
         app.state.http_client
     ))
 
@@ -203,7 +231,7 @@ async def lifespan(app: FastAPI):
     ))
 
     yield
-    
+
     # Limpiar al cerrar
     print("Cerrando cliente HTTP...")
     await app.state.http_client.aclose()
@@ -212,6 +240,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 # --- Endpoints ---
+
 
 @app.get("/materias/", response_model=list[MateriaPublic])
 def read_materias(
@@ -225,31 +254,23 @@ def read_materias(
     stmt = select(Materia).join(Seccion).where(
         Seccion.id_ciclo == ciclo
     )
-    
+
     if carrera is not None:
-        stmt = stmt.join(CarreraMateriaLink,  
-                        and_(CarreraMateriaLink.id_carrera == carrera, 
-                            CarreraMateriaLink.id_materia == Materia.id))
+        stmt = stmt.join(CarreraMateriaLink,
+                         and_(CarreraMateriaLink.id_carrera == carrera,
+                              CarreraMateriaLink.id_materia == Materia.id))
 
     if centro is not None:
         stmt = stmt.where(Seccion.id_centro == centro)
 
     materias = session.exec(stmt.distinct().offset(offset).limit(limit)).all()
-
-    result: list[MateriaPublic] = []
-    for m in materias:
-        result.append(MateriaPublic(
-            clave=m.clave,
-            nombre=m.nombre,
-            creditos=m.creditos
-        ))
-    return result
+    return materias
 
 
 @app.get("/materia/{centro}/{materia}/{ciclo}/secciones", response_model=list[SeccionPublic])
 def read_secciones_de_materia(session: SessionDep, centro: CentroDep, materia: MateriaDep, ciclo: CicloDep):
     secciones = session.exec(select(Seccion).where(
-        Seccion.id_materia == materia, 
+        Seccion.id_materia == materia,
         Seccion.id_ciclo == ciclo,
         Seccion.id_centro == centro)).all()
     secciones_public: list[SeccionPublic] = []
@@ -280,29 +301,23 @@ def read_secciones_de_materia(session: SessionDep, centro: CentroDep, materia: M
 
 @app.get("/materia/{materia}", response_model=MateriaPublic)
 def read_materia(session: SessionDep, materia: MateriaDep):
-    m = session.get(Materia, materia)
-    if not m:
-        raise HTTPException(status_code=404, detail="Materia no encontrada")
-    return MateriaPublic(
-                clave=m.clave,
-                nombre=m.nombre,
-                creditos=m.creditos
-            )
+    return session.get(Materia, materia)
+
 
 @app.get("/ciclos/", response_model=list[str])
 def read_ciclos(session: SessionDep):
-    ciclos = session.exec(select(Ciclo)).all()
-    return sorted([c.nombre for c in ciclos], reverse=True)
+    ciclos = session.exec(select(Ciclo.nombre)).all()
+    return sorted(ciclos, reverse=True)
+
 
 @app.get("/centros/", response_model=list[str])
 def read_centros(session: SessionDep):
-    centros = session.exec(select(Centro)).all()
-    result = [centro_a_alias.get(c.nombre, c.nombre) for c in centros]
-    return sorted(result)
+    centros = session.exec(select(Centro.nombre)).all()
+    return sorted([centro_a_alias.get(centro, centro) for centro in centros])
+
 
 @app.get("/carreras/{ciclo}/{centro}", response_model=list[CarreraPublic])
 def read_carreras(session: SessionDep, ciclo: CicloDep, centro: CentroDep):
-
     statement = (
         select(Carrera)
         .select_from(Carrera)
@@ -315,37 +330,26 @@ def read_carreras(session: SessionDep, ciclo: CicloDep, centro: CentroDep):
         ))
         .where(CentroCarreraLink.id_centro == centro)
         .distinct()
-        )
-    carreras = session.exec(statement).all()
-    return [CarreraPublic(clave=c.clave, nombre=c.nombre) for c in carreras]
+    )
+    return session.exec(statement).all()
 
 # Reseñas
+
+
 @app.get("/resenas/", response_model=list[ResenaPublic])
 def read_resenas(
         session: SessionDep,
-        profesor: str | None = None,
-        materia: str | None = None,
+        profesor: ProfesorOptDep = None,
+        materia: MateriaOptDep = None,
         offset: int = 0,
         limit: Annotated[int, Query(le=100)] = 100):
-    
     stmt = select(Resena)
-    
     if profesor is not None:
-        id_profesor = session.exec(select(Profesor.id).where(
-            Profesor.nombre == profesor)).first()
-        if id_profesor is None:
-            raise HTTPException(status_code=404, detail="Profesor no encontrado")
-        stmt = stmt.where(Resena.id_profesor == id_profesor)
-    
+        stmt = stmt.where(Resena.id_profesor == profesor)
     if materia is not None:
-        id_materia = session.exec(select(Materia.id).where(
-            Materia.clave == materia)).first()
-        if id_materia is None:
-            raise HTTPException(status_code=404, detail="Materia no encontrada")
-        stmt = stmt.where(Resena.id_materia == id_materia)
-    
+        stmt = stmt.where(Resena.id_materia == materia)
     resenas = session.exec(stmt.offset(offset).limit(limit)).all()
-    
+
     result: list[ResenaPublic] = []
     for r in resenas:
         result.append(ResenaPublic(
@@ -357,17 +361,17 @@ def read_resenas(
         ))
     return result
 
+
 @app.post("/resenas/solicitar", response_model=ResenaPendienteResponse)
 async def solicitar_resena(
-    datos: ResenaPendienteCreate, 
-    session: SessionDep, 
+    datos: ResenaPendienteCreate,
+    session: SessionDep,
     request: Request
 ):
 
-    id_alumno = validar_alumno(datos.correo_alumno, session)
-    id_materia = validar_materia(datos.clave_materia, session)
-    id_profesor = validar_profesor(datos.nombre_profesor, session)
-    
+    id_alumno = validar_alumno(session, datos.correo_alumno)
+    id_materia = validar_materia(session, datos.clave_materia)
+    id_profesor = validar_profesor(session, datos.nombre_profesor)
 
     resena_existente = session.exec(
         select(Resena).where(
@@ -376,13 +380,14 @@ async def solicitar_resena(
             Resena.id_alumno == id_alumno
         )
     ).first()
-    
+
     if resena_existente:
         raise HTTPException(
-            status_code=409, 
-            detail="Reseña ya existe (editar???)" #TAG: Agregar editar reseña?
+            status_code=409,
+            # TAG: Agregar editar reseña?
+            detail="Reseña ya existe (editar???)"
         )
-    
+
     # Verificar si ya existe una reseña pendiente
     pendiente_existente = session.exec(
         select(ResenaPendiente).where(
@@ -397,7 +402,7 @@ async def solicitar_resena(
 
         codigo_existente = session.exec(
             select(ResenaPendiente).where(ResenaPendiente.codigo == codigo)
-            ).first()
+        ).first()
         if not codigo_existente:
             break
 
@@ -406,7 +411,8 @@ async def solicitar_resena(
         pendiente_existente.contenido = datos.contenido
         pendiente_existente.satisfaccion = datos.satisfaccion
         pendiente_existente.codigo = codigo
-        pendiente_existente.fecha_creacion = datetime.datetime.now(datetime.timezone.utc)
+        pendiente_existente.fecha_creacion = datetime.datetime.now(
+            datetime.timezone.utc)
         session.commit()
     else:
 
@@ -418,26 +424,29 @@ async def solicitar_resena(
             satisfaccion=datos.satisfaccion,
             codigo=codigo
         )
-        print(f"DEBUG: profesor:{id_profesor}, materia:{id_materia}, alumno:{id_alumno}")
-        print(f"DEBUG: Tipo de datos: {type(id_profesor)}, {type(id_materia)}, {type(id_alumno)}")
+        print(
+            f"DEBUG: profesor:{id_profesor}, materia:{id_materia}, alumno:{id_alumno}")
+        print(
+            f"DEBUG: Tipo de datos: {type(id_profesor)}, {type(id_materia)}, {type(id_alumno)}")
         session.add(nueva_pendiente)
         session.commit()
-    
-    
+
     try:
 
-        base_url = "http://localhost:8080/api" or str(request.base_url).rstrip('/')+"/api" #TAG: Ajustar URL base para producción
+        # TAG: Ajustar URL base para producción
+        base_url = "http://localhost:8080/api" or str(
+            request.base_url).rstrip('/')+"/api"
 
         print(f"DEBUG: base_url para email: {base_url}")
         await enviar_enlace_verificacion(datos.correo_alumno, codigo, base_url)
 
     except Exception as e:
-        
+
         return ResenaPendienteResponse(
             mensaje="Reseña guardada, pero hubo un error al enviar el correo de verificación",
             advertencia=f"Error: {str(e)}"
         )
-    
+
     return ResenaPendienteResponse(
         mensaje=f"Reseña guardada. Revisa tu correo ({datos.correo_alumno}) para verificar y publicar."
     )
@@ -445,21 +454,21 @@ async def solicitar_resena(
 
 @app.get("/resenas/verificar/{codigo}", response_model=ResenaVerificadaResponse)
 async def verificar_resena(
-    codigo: str, 
+    codigo: str,
     session: SessionDep,
     json: bool = Query(False)
 ):
     pendiente = session.exec(
         select(ResenaPendiente).where(ResenaPendiente.codigo == codigo)
     ).first()
-    
+
     if not pendiente:
         if json:
             raise HTTPException(
                 status_code=404,
                 detail="El enlace de verificación no es válido o ya fue utilizado."
             )
-        
+
         return HTMLResponse("""
         <html>
             <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; text-align: center;">
@@ -468,7 +477,7 @@ async def verificar_resena(
             </body>
         </html>
         """)
-    
+
     # Crear la reseña pública
     resena_publica = Resena(
         id_profesor=int(pendiente.id_profesor),
@@ -477,18 +486,18 @@ async def verificar_resena(
         contenido=pendiente.contenido,
         satisfaccion=pendiente.satisfaccion
     )
-    
+
     try:
         session.add(resena_publica)
         session.delete(pendiente)
         session.commit()
-        
+
         if json:
             return ResenaVerificadaResponse(
                 mensaje="Reseña publicada exitosamente",
                 status="success"
             )
-        
+
         return HTMLResponse("""
         <html>
             <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; text-align: center;">
@@ -519,14 +528,15 @@ async def trigger_refresh(datos: RefreshRequest, request: Request, session: Sess
     """
     Endpoint para refrescar una materia específica.
     Inicia un worker asíncrono independiente del scraping principal.
-    
+
     El usuario proporciona el nombre o alias del centro, el sistema lo resuelve internamente.
     """
     client = request.app.state.http_client
-    
+
     # Obtener la clave (cup) del centro desde la BD
-    centro_clave, centro_nombre_real = obtener_clave_centro(datos.centro, session)
-    
+    centro_clave, centro_nombre_real = obtener_clave_centro(
+        datos.centro, session)
+
     # Crear una tarea asíncrona independiente que NO usa el lock global
     async def refresh_task():
         try:
@@ -543,10 +553,10 @@ async def trigger_refresh(datos: RefreshRequest, request: Request, session: Sess
                 print(f"Refresh falló: {datos.materia}")
         except Exception as e:
             print(f"Error en refresh task: {e}")
-    
+
     # Iniciar la tarea en segundo plano
     asyncio.create_task(refresh_task())
-    
+
     return RefreshResponse(
         mensaje="Proceso de actualización iniciado",
         status="processing",
@@ -558,6 +568,7 @@ async def trigger_refresh(datos: RefreshRequest, request: Request, session: Sess
         }
     )
 
+
 @app.post("/admin/refresh-full")
 async def trigger_full_refresh(request: Request):
     """
@@ -567,11 +578,14 @@ async def trigger_full_refresh(request: Request):
     client = request.app.state.http_client
 
     if lock.locked():
-        raise HTTPException(status_code=429, detail="Un scrapeo ya está en curso.")
-    
+        raise HTTPException(
+            status_code=429, detail="Un scrapeo ya está en curso.")
+
     # Inicia la tarea en segundo plano y responde inmediatamente
-    asyncio.create_task(scrape_and_update_db(lock, client, num_ciclos_recientes=1, inicial=False))
+    asyncio.create_task(scrape_and_update_db(
+        lock, client, num_ciclos_recientes=1, inicial=False))
     return {"message": "Proceso de actualización completa iniciado en segundo plano."}
+
 
 @app.get("/abu")
 async def abu_endpoint():
@@ -582,6 +596,7 @@ async def abu_endpoint():
     contenido_decodificado = base64.b64decode(contenido_bytes).decode('utf-8')
     return HTMLResponse(content=contenido_decodificado, media_type="text/plain")
 
+
 @app.post("/soporte")
 async def recibir_soporte(datos: SoporteRequest):
     try:
@@ -589,4 +604,5 @@ async def recibir_soporte(datos: SoporteRequest):
         return {"mensaje": "Reporte enviado correctamente", "status": "success"}
     except Exception as e:
         print(f"Error en endpoint soporte: {e}")
-        raise HTTPException(status_code=500, detail="Error interno al enviar el reporte")
+        raise HTTPException(
+            status_code=500, detail="Error interno al enviar el reporte")
