@@ -14,6 +14,10 @@ def validar_ciclo(session: SessionDep, ciclo: str) -> int:
         raise HTTPException(status_code=404, detail="Ciclo no encontrado")
     return id_ciclo
 
+def ciclo_opcional(session: SessionDep, ciclo: str | None = None) -> int | None:
+    if ciclo is None:
+        return None
+    return validar_ciclo(session, ciclo)
 
 def validar_materia(session: SessionDep, materia: str) -> int:
     id_materia = session.exec(select(Materia.id).where(
@@ -117,6 +121,7 @@ def carrera_opcional(session: SessionDep, carrera: str | None = None) -> int | N
 
 
 CicloDep = Annotated[int, Depends(validar_ciclo)]
+CicloOptDep = Annotated[int, Depends(ciclo_opcional)]
 MateriaDep = Annotated[int, Depends(validar_materia)]
 CentroDep = Annotated[int, Depends(validar_centro)]
 AlumnoDep = Annotated[int, Depends(validar_alumno)]

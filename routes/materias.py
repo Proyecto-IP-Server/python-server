@@ -6,13 +6,17 @@ from sqlmodel import and_
 @app.get("/materias/", response_model=list[MateriaPublic])
 def read_materias(
         session: SessionDep,
-        ciclo: CicloDep,
+        ciclo: CicloOptDep = None,
         carrera: CarreraOptDep = None,
         centro: CentroOptDep = None,
         offset: int = 0,
         limit: Annotated[int, Query(le=1000)] = 1000):
 
-    stmt = select(Materia).join(Seccion).where(
+    stmt = select(Materia)
+    if ciclo or centro:
+        stmt = stmt.join(Seccion)
+    if ciclo is not None:
+        stmt = stmt.where(
         Seccion.id_ciclo == ciclo
     )
 
