@@ -121,12 +121,12 @@ def carrera_opcional(session: SessionDep, carrera: str | None = None) -> int | N
 
 
 CicloDep = Annotated[int, Depends(validar_ciclo)]
-CicloOptDep = Annotated[int, Depends(ciclo_opcional)]
 MateriaDep = Annotated[int, Depends(validar_materia)]
 CentroDep = Annotated[int, Depends(validar_centro)]
 AlumnoDep = Annotated[int, Depends(validar_alumno)]
 ProfesorDep = Annotated[int, Depends(validar_profesor)]
 CarreraDep = Annotated[int, Depends(validar_carrera)]
+CicloOptDep = Annotated[int | None, Depends(ciclo_opcional)]
 MateriaOptDep = Annotated[int | None, Depends(materia_opcional)]
 CentroOptDep = Annotated[int | None, Depends(centro_opcional)]
 ProfesorOptDep = Annotated[int | None, Depends(profesor_opcional)]
