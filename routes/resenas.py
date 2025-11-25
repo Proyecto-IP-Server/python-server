@@ -7,6 +7,8 @@ from fastapi.responses import HTMLResponse
 import hashlib
 import random
 from email_service import enviar_enlace_verificacion
+from faker import Faker
+fake = Faker('es_MX')
 @app.get("/resenas/", response_model=list[ResenaPublic])
 def read_resenas(
         session: SessionDep,
@@ -23,10 +25,11 @@ def read_resenas(
 
     result: list[ResenaPublic] = []
     for r in resenas:
+        fake.seed_instance(hashlib.sha256((r.alumno.correo + str(r.alumno.id)).encode('utf-8')).hexdigest())
         result.append(ResenaPublic(
             profesor=r.profesor.nombre,
             materia=r.materia.clave,
-            alumno=hashlib.sha256((r.alumno.correo + str(r.alumno.id)).encode('utf-8')).hexdigest(),
+            alumno=fake.name(),
             contenido=r.contenido,
             satisfaccion=r.satisfaccion
         ))
