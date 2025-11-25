@@ -119,6 +119,9 @@ class Sesion(SQLModel, table=True):
 
 # --- Modelos Pydantic (Respuesta de API) ---
 
+class ProfesorPublic(BaseModel):
+    nombre: str
+
 class MateriaPublic(BaseModel):
     clave: str
     nombre: str
