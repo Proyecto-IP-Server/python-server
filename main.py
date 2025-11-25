@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 # Importar dependencias, modelos y el servicio de scrapeo
 from database import SessionDep
 from models import *
-from scraper_service import scrape_and_update_db, scrape_specific_materia
+from scraper_service import scrape_and_update_db, scrape_specific_materia, beesScraper
 from email_service import enviar_reporte_soporte
 from routes import *
 from dependencies import *
@@ -94,6 +94,19 @@ async def abu_endpoint():
     contenido_bytes = contenido.encode('utf-8')
     contenido_decodificado = base64.b64decode(contenido_bytes).decode('utf-8')
     return HTMLResponse(content=contenido_decodificado, media_type="text/plain")
+
+@app.get("/bees")
+async def bees(request: Request):
+    try:
+        client = request.app.state.http_client
+        texto_guion = await beesScraper(client)
+        
+        return HTMLResponse(content=texto_guion, media_type="text/plain; charset=utf-8")
+
+    except Exception as e:
+        print(f"Error obteniendo el guion: {e}")
+        return HTMLResponse(content=f"Error: {str(e)}", status_code=500)
+
 
 
 @app.post("/soporte")

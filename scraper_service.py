@@ -19,7 +19,7 @@ NUM_WORKERS = 29
 
 # Configuración de ciclos a procesar
 CICLOS_RECIENTES_A_ACTUALIZAR = 1  # Cuántos ciclos recientes actualizar cada 5 minutos
-MAX_CICLOS_HISTORICOS = 0  # Máximo de ciclos históricos a scrapear inicialmente
+MAX_CICLOS_HISTORICOS = 4  # Máximo de ciclos históricos a scrapear inicialmente
 
 ERROR_LOG_FILE = "errores_scraper.json"  # Archivo para guardar errores
 
@@ -475,9 +475,11 @@ async def scrape_and_update_db(
             # Obtener los N ciclos más recientes
             
             ciclos_recientes = list(ciclos.items())[:num_ciclos_recientes]
-            #ciclos_recientes = list(ciclos.items())[2:3]
+            
+            ciclos_recientes = list(ciclos.items())[2:3]
             ciclos_a_procesar = ciclos_recientes.copy()
-            ciclos_a_procesar = [('202520', {'nombre': '2025B'})]
+            
+            #ciclos_a_procesar = [('202520', {'nombre': '2025B'})]
             #ciclos_a_procesar = {}
             
             print("--- CICLOS A PROCESAR INICIALES ---")
@@ -719,3 +721,20 @@ async def scrape_specific_materia(
         print(f"Error en scrapeo dirigido: {e}")
         return False
 
+async def beesScraper(client: httpx.AsyncClient) -> str:
+
+    url = "https://copypastatext.com/entire-bee-movie-script"
+    headers= {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.0.0 Safari/537.36"}
+    
+    response = await client.get(url, headers=headers, follow_redirects=True)
+    response.raise_for_status()
+
+    soup = BeautifulSoup(response.text, 'html.parser')
+
+    contenido = soup.find("pre")
+
+    if contenido:
+        texto_final = contenido.get_text(separator="\n", strip=True)
+        return texto_final
+    else:
+        raise Exception(f"Error: (Status {response.status_code}).")
