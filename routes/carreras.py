@@ -24,6 +24,7 @@ def read_carreras(session: SessionDep, ciclo: CicloOptDep = None, centro: Centro
         .join(CentroCarreraLink, CentroCarreraLink.id_carrera == Carrera.id) # type: ignore
         .join(CarreraMateriaLink, CarreraMateriaLink.id_carrera == Carrera.id) # type: ignore
         .join(Seccion, on_clause)
+        .where(CentroCarreraLink.id_centro == centro)
         .distinct()
     )
     return session.exec(statement).all()

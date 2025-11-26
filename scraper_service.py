@@ -480,7 +480,7 @@ async def scrape_and_update_db(
             ciclos_a_procesar = ciclos_recientes.copy()
             
             #ciclos_a_procesar = [('202520', {'nombre': '2025B'})]
-            #ciclos_a_procesar = {}
+            ciclos_a_procesar = {}
             
             print("--- CICLOS A PROCESAR INICIALES ---")
             print(ciclos_a_procesar)

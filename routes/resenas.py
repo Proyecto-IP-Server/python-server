@@ -56,13 +56,6 @@ async def solicitar_resena(
         )
     ).first()
 
-    if resena_existente:
-        raise HTTPException(
-            status_code=409,
-            # TAG: Agregar editar reseña?
-            detail="Reseña ya existe (editar???)"
-        )
-
     # Verificar si ya existe una reseña pendiente
     pendiente_existente = session.exec(
         select(ResenaPendiente).where(
@@ -124,9 +117,9 @@ async def solicitar_resena(
             mensaje="Reseña guardada, pero hubo un error al enviar el correo de verificación",
             advertencia=f"Error: {str(e)}"
         )
-
+    tipo_accion = "actualizar" if resena_existente else "publicar"
     return ResenaPendienteResponse(
-        mensaje=f"Reseña guardada. Revisa tu correo ({datos.correo_alumno}) para verificar y publicar."
+        mensaje=f"Proceso iniciado. Revisa tu correo ({datos.correo_alumno}) para verificar y {tipo_accion}."
     )
 
 
@@ -156,17 +149,33 @@ async def verificar_resena(
         </html>
         """)
 
-    # Crear la reseña pública
-    resena_publica = Resena(
-        id_profesor=int(pendiente.id_profesor),
-        id_materia=int(pendiente.id_materia),
-        id_alumno=int(pendiente.id_alumno),
-        contenido=pendiente.contenido,
-        satisfaccion=pendiente.satisfaccion
-    )
-
     try:
-        session.add(resena_publica)
+
+        resena_existente = session.exec(
+            select(Resena).where(
+                Resena.id_profesor == pendiente.id_profesor,
+                Resena.id_materia == pendiente.id_materia,
+                Resena.id_alumno == pendiente.id_alumno
+            )
+        ).first()
+
+        if resena_existente:
+            resena_existente.contenido = pendiente.contenido
+            resena_existente.satisfaccion = pendiente.satisfaccion
+
+            resena_existente.fecha_creacion = datetime.datetime.now(
+                datetime.timezone.utc)
+            session.add(resena_existente) 
+        else:
+            resena_publica = Resena(
+                id_profesor=int(pendiente.id_profesor),
+                id_materia=int(pendiente.id_materia),
+                id_alumno=int(pendiente.id_alumno),
+                contenido=pendiente.contenido,
+                satisfaccion=pendiente.satisfaccion
+            )
+            session.add(resena_publica) # Marca para INSERT
+
         session.delete(pendiente)
         session.commit()
 
@@ -179,23 +188,25 @@ async def verificar_resena(
         return HTMLResponse("""
         <html>
             <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; text-align: center;">
-                <h1 style="color: #16a34a;"> Reseña publicada.</h1>
-                <p>Tu reseña ha sido verificada y ahora es pública.</p>
+                <h1 style="color: #16a34a;">Acción completada.</h1>
+                <p>Tu reseña ha sido verificada y publicada correctamente.</p>
             </body>
         </html>
         """)
+        
     except Exception as e:
         session.rollback()
+        print(f"ERROR al verificar reseña: {str(e)}")
         if json:
             raise HTTPException(
                 status_code=500,
-                detail=f"Error al publicar la reseña: {str(e)}"
+                detail=f"OCURRIO UN ERROR AL PROCESAR LA SOLICITUD"
             )
         return HTMLResponse(f"""
         <html>
             <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; text-align: center;">
                 <h2 style="color: #dc2626;">Error</h2>
-                <p>Error: {str(e)}</p>
+                <p>Ocurrió un error interno al procesar tu solicitud.</p>
             </body>
         </html>
         """)
