@@ -29,7 +29,7 @@ conf = ConnectionConfig(
 fastmail = FastMail(conf)
 
 
-async def enviar_enlace_verificacion(correo_destino: EmailStr, codigo: str, base_url: str = "http://localhost:8000"):
+async def enviar_enlace_verificacion(correo_destino: EmailStr, codigo: str, nombre: str,base_url: str = "http://localhost:8000"):
 
     #Codigo es un numero de 6 digitos generado aleatoriamente
     enlace_verificacion = f"{base_url}/resenas/verificar/{codigo}"
@@ -43,6 +43,7 @@ async def enviar_enlace_verificacion(correo_destino: EmailStr, codigo: str, base
             <h3 style="background-color: #f4f4f4; padding: 10px; border-radius: 5px; text-align: center; font-size: 40px;">{codigo}</h3>
             <p>O haz clic en el siguiente enlace para verificar:</p>
             <p style="text-align:center"><a href="{enlace_verificacion}" style="background-color: #2563eb; color: white; padding: 10px 30px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold; text-aling: center">Verificar Reseña</a></p>
+            <p>Esta reseña se publicara con el nombre <strong>{nombre}</strong>, para mantener el anonimato.</p>
             
             <p style="color: #999; font-size: 12px; margin-top: 30px;">
                 Si no solicitaste publicar una reseña, puedes ignorar este mensaje.

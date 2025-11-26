@@ -9,6 +9,7 @@ import random
 from email_service import enviar_enlace_verificacion
 from faker import Faker
 fake = Faker('es_MX')
+
 @app.get("/resenas/", response_model=list[ResenaPublic])
 def read_resenas(
         session: SessionDep,
@@ -29,7 +30,7 @@ def read_resenas(
         result.append(ResenaPublic(
             profesor=r.profesor.nombre,
             materia=r.materia.clave,
-            alumno=fake.name(),
+            alumno= f"{fake.word()} {fake.color_name()}".title(),
             contenido=r.contenido,
             satisfaccion=r.satisfaccion
         ))
@@ -112,7 +113,10 @@ async def solicitar_resena(
             request.base_url).rstrip('/')+"/api"
 
         print(f"DEBUG: base_url para email: {base_url}")
-        await enviar_enlace_verificacion(datos.correo_alumno, codigo, base_url)
+        fake.seed_instance(hashlib.sha256((datos.correo_alumno + str(id_alumno)).encode('utf-8')).hexdigest())
+        nombre=f"{fake.word()} {fake.color_name()}".title()
+        
+        await enviar_enlace_verificacion(datos.correo_alumno, codigo, nombre,base_url)
 
     except Exception as e:
 
