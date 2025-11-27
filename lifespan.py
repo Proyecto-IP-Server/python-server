@@ -7,7 +7,7 @@ import os
 from database import create_db_and_tables
 from scraper_service import scrape_and_update_db
 
-# --- Configuración de Actualización Histórica ---
+
 HISTORICAL_UPDATE_INTERVAL_HOURS = 24
 
 
@@ -51,7 +51,7 @@ with open(ALIAS_CENTROS_PATH, 'r', encoding='utf-8') as f:
 
 async def background_scraper_loop(lock: asyncio.Lock, client: httpx.AsyncClient):
     while True:
-        await asyncio.sleep(3600)  # 300 segundos = 5 minutos
+        await asyncio.sleep(600)  # Cada 10 minutos
         print("\n--- [TAREA DE FONDO] Iniciando scrapeo programado ---")
         await scrape_and_update_db(lock, client, num_ciclos_recientes=1, inicial=False)
 

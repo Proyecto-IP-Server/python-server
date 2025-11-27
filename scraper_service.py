@@ -10,7 +10,7 @@ from sqlmodel import Session, select
 from database import engine
 from models import *
 
-# --- Constantes del Scraper ---
+
 BASE_URL = 'http://consulta.siiau.udg.mx/wco/'
 FORMA_CONSULTA_URL = f"{BASE_URL}sspseca.forma_consulta"
 LISTA_CARRERAS_URL = f"{BASE_URL}sspseca.lista_carreras"
@@ -21,9 +21,9 @@ NUM_WORKERS = 29
 CICLOS_RECIENTES_A_ACTUALIZAR = 1  # Cuántos ciclos recientes actualizar cada 5 minutos
 MAX_CICLOS_HISTORICOS = 4  # Máximo de ciclos históricos a scrapear inicialmente
 
-ERROR_LOG_FILE = "errores_scraper.json"  # Archivo para guardar errores
 
-# --- Funciones de Parseo y Scrapeo (Asíncronas) ---
+
+# Funciones de Parseo y Scrapeo 
 
 async def get_initial_options_async(client: httpx.AsyncClient):
     """
@@ -198,7 +198,7 @@ async def get_courses_for_carrera_async(
             break
     return all_courses
 
-# --- Lógica de Base de Datos y Orquestación ---
+# Lógica de Base de Datos y Orquestación
 
 def check_ciclo_has_data(session: Session, ciclo_code: str) -> bool:
     """
@@ -252,7 +252,7 @@ async def process_center_data(
     ciclo_info: dict, 
     centro_code: str, 
     centro_info: dict,
-    carreras_filter: list[str] | None = None # <-- PARÁMETRO AÑADIDO
+    carreras_filter: list[str] | None = None
 ):
     """
     Procesa todas las carreras y cursos para un único centro y los guarda en la BD.
@@ -480,7 +480,7 @@ async def scrape_and_update_db(
             ciclos_a_procesar = ciclos_recientes.copy()
             
             #ciclos_a_procesar = [('202520', {'nombre': '2025B'})]
-            ciclos_a_procesar = {}
+            #ciclos_a_procesar = {}
             
             print("--- CICLOS A PROCESAR INICIALES ---")
             print(ciclos_a_procesar)
